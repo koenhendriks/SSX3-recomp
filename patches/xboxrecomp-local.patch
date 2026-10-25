@@ -8752,10 +8752,10 @@ index 08bae4b..f12235a 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..e87eca6
+index 0000000..d5f3e1a
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,491 @@
+@@ -0,0 +1,493 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -9033,6 +9033,8 @@ index 0000000..e87eca6
 +/* RECOMP_SNAP_TRIGGER=<file>: when it appears, dump the shown frame to the BMP
 + * path it contains and delete it. hi: the GPU backend's full-resolution frame
 + * when that is what the window shows (s_rgb is not updated then). */
++void xbox_FramebufferSnapshot(const char *path);
++
 +static void snap_trigger_poll(const uint32_t *hi, uint32_t hi_w, uint32_t hi_h)
 +{
 +    (void)hi; (void)hi_w; (void)hi_h;   /* the published frame (s_hi) is used */
