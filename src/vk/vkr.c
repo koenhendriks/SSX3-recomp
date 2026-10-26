@@ -68,6 +68,12 @@ typedef struct {
     VkDeviceMemory rbh_mem;
     uint8_t *rbh_map;
     int rbh_noncoherent;
+    /* What was copied into rbh at the frame's submit: its size, 0 = none
+     * (internal resolution 1x). Read by the flip thread later, when c->sw /
+     * c->sh may already be an offscreen target's (a 512x512 shadow map):
+     * taken from those, the window showed the first 512x512 pixels of the
+     * frame -- a garbled flash every second or two. */
+    uint32_t rbh_w, rbh_h;
     int busy;                       /* submitted, read-back not released yet */
     /* RECOMP_VKR_GPUPROF: a timestamp after every draw of the frame */
     VkQueryPool qp;
@@ -2668,11 +2674,13 @@ int vkr_flip_submit(VkrContext *c)
     cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     cp.imageSubresource.layerCount = 1;
     cp.imageExtent.depth = 1;
+    c->fr[slot].rbh_w = c->fr[slot].rbh_h = 0;
     if (c->scale == 1.0f && c->scale_x == 1.0f) {
         cp.imageExtent.width = c->w; cp.imageExtent.height = c->h;
         vkCmdCopyImageToBuffer(c->cmd, frame, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                c->fr[slot].rb, 1, &cp);
     } else {
+        c->fr[slot].rbh_w = c->sw; c->fr[slot].rbh_h = c->sh;
         /* The full image for the presenter, and a filtered guest-size copy
          * for guest memory (what the title and the screenshots read). */
         VkImageBlit bl = {0};
@@ -2722,6 +2730,8 @@ int vkr_flip_submit(VkrContext *c)
     if (++c->flip_serial % 120 == 0)     /* every ~2 s: textures unused for 5 s */
         tex_evict_old(c, 300);
     if (c->tex_bytes > (768ull << 20)) {  /* drop the cache once nothing is in flight */
+        fprintf(stderr, "[VKR] texture cache over 768 MB at flip %u: dropping %u textures (%llu MB)\n",
+                c->flip_serial, c->ntexs, (unsigned long long)(c->tex_bytes >> 20));
         vkDeviceWaitIdle(c->dev);
         tex_free_all(c);
     }
@@ -2744,14 +2754,14 @@ const uint8_t *vkr_frame_pixels(VkrContext *c, int slot)
  * (*w x *h), or NULL when the internal resolution is the guest's. */
 const uint8_t *vkr_frame_pixels_full(VkrContext *c, int slot, uint32_t *w, uint32_t *h)
 {
-    if ((c->scale == 1.0f && c->scale_x == 1.0f) || !c->fr[slot].rbh_map)
+    if (!c->fr[slot].rbh_w || !c->fr[slot].rbh_map)
         return NULL;
     if (c->fr[slot].rbh_noncoherent) {
         VkMappedMemoryRange mr = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
         mr.memory = c->fr[slot].rbh_mem; mr.offset = 0; mr.size = VK_WHOLE_SIZE;
         vkInvalidateMappedMemoryRanges(c->dev, 1, &mr);
     }
-    *w = c->sw; *h = c->sh;
+    *w = c->fr[slot].rbh_w; *h = c->fr[slot].rbh_h;
     return c->fr[slot].rbh_map;
 }
 
