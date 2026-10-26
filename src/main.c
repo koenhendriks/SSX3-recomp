@@ -828,6 +828,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      *     thread AddRefs the failed device (0xFFFFFFFF) in sub_0025FC35. */
     if (!getenv("RECOMP_TITLE_KEVENTS")) _putenv_s("RECOMP_TITLE_KEVENTS", "1");
     if (!getenv("RECOMP_VBLANK"))        _putenv_s("RECOMP_VBLANK", "1");
+    /*   RECOMP_VBLANK_SYNC=display: the vblank grid locks to the display's
+     *     refreshes on a 60/120/240 Hz display (free otherwise); "free" =
+     *     the old free-running 60 Hz grid. */
+    if (!getenv("RECOMP_VBLANK_SYNC"))   _putenv_s("RECOMP_VBLANK_SYNC", "display");
+    /*   RECOMP_PRESENT_TIMING=auto: frames are presented paced to the display
+     *     (lock on 60/120/240 Hz, timed under VRR, warned on other rates);
+     *     "legacy" = present each frame as soon as it is ready. */
+    if (!getenv("RECOMP_PRESENT_TIMING")) _putenv_s("RECOMP_PRESENT_TIMING", "auto");
     if (!getenv("RECOMP_AC97_READY"))    _putenv_s("RECOMP_AC97_READY", "1");
     /*   (The DirectSound DSP command word is registered at run time by the
      *     sub_0025BD81 wrapper in ssx3_overrides.c; no RECOMP_DSP_ACK.)

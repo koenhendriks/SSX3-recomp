@@ -36,6 +36,19 @@ HD textures
 Saves are written next to the game files (UDATA). Logs go to a logs
 folder next to the game folder; "Open logs" in the launcher shows them.
 
+Smoothness and variable refresh
+  The game runs at 60 frames a second, and "Frame pacing: Auto" in the
+  launcher shows them evenly:
+  - On a 60, 120 or 240 Hz display every frame is on screen for the same
+    time.
+  - On a G-Sync / FreeSync / HDMI VRR display (turn it on in the graphics
+    driver, and on the monitor or TV) the frames arrive exactly 1/60 s
+    apart and the display follows them. G-Sync only works for the window
+    in front.
+  - On a 144 or 165 Hz display without variable refresh, 60 frames cannot
+    be spread evenly over its refreshes: the launcher says so under Frame
+    pacing. Turn variable refresh on, or set the display to 120 Hz.
+
 Reporting a problem
   Every session writes a log: the settings, the menus and events you
   played, results, saves, frame rate per event, warnings and errors, and

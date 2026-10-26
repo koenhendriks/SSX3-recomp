@@ -63,6 +63,10 @@ static void stats_tick(void)
 extern ptrdiff_t xbox_GetMemoryOffset(void);
 extern void *xbox_GuestToHost(uint32_t va);   /* any mapped guest range (also the web build) */
 extern void xbox_FramebufferPublishImage(const uint32_t *px, uint32_t w, uint32_t h);
+extern void xbox_FramebufferPublishImageVbl(const uint32_t *px, uint32_t w, uint32_t h, double vblank_ms);
+extern double xbox_FrameVblankPop(void);
+extern void xbox_FrameVblankFlush(void);
+extern double xbox_VblankLastEdgeMs(void);
 extern int ssx3_WidescreenNow(void);
 extern int ssx3_InGame(void);
 extern int ssx3_InGameMenuUp(void);
@@ -93,7 +97,8 @@ static int s_dirty;                     /* drawn since the last flip */
  * the result into the surface the title flipped, so the executor never
  * waits for the GPU to finish a frame (it did: ~5 ms a flip, a quarter of
  * its time in a race). The copy lands a few ms after the flip. */
-typedef struct { int slot; uint32_t offset, pitch, x, y, w, h; unsigned frame; int shot; } FlipJob;
+typedef struct { int slot; uint32_t offset, pitch, x, y, w, h; unsigned frame; int shot;
+                 double vblank_ms; } FlipJob;   /* vblank: its tick's, for the presenter's pacing */
 static void mbtest_write(const FlipJob *j, const uint8_t *px, uint32_t w, uint32_t h);
 static FlipJob s_jobs[4];
 static int s_job_head, s_job_n;
@@ -325,7 +330,7 @@ static void *flip_thread(void *unused)
             /* Higher internal resolution: the window shows the full image. */
             full = vkr_frame_pixels_full(s_vk, j.slot, &fw, &fh);
             if (full) {
-                xbox_FramebufferPublishImage((const uint32_t *)full, fw, fh);
+                xbox_FramebufferPublishImageVbl((const uint32_t *)full, fw, fh, j.vblank_ms);
                 record_frame(full, fw, fh);
             }
             if (full && j.shot)
@@ -2357,6 +2362,15 @@ static void be_flip(const Nv2aTarget *t)
     j.shot = mbtest_flip();
     j.slot = vkr_flip_submit(s_vk);
     j.frame = s_draw_frame++;
+    /* The vblank of the tick this frame was rendered for (pushed by the
+     * renderer's present, ssx3_overrides.c sub_001F3020): one per flip. One
+     * more than 100 ms behind the grid is from a stretch where presents and
+     * flips did not pair up: start over from now. */
+    j.vblank_ms = xbox_FrameVblankPop();
+    if (j.vblank_ms > 0.0 && xbox_VblankLastEdgeMs() - j.vblank_ms > 100.0) {
+        xbox_FrameVblankFlush();
+        j.vblank_ms = 0.0;
+    }
     s_gl_ord = 0;
     if (s_stats) { s_t[4] += now_ms() - tf; s_n[2]++; }
     if (j.slot < 0)

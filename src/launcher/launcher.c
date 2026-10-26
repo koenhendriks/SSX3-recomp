@@ -32,7 +32,7 @@
 
 enum {
     ID_PATH = 100, ID_BROWSE, ID_STATUS,
-    ID_RES, ID_ASPECT, ID_MSAA, ID_ANISO, ID_DRAWDIST, ID_SHADOWS, ID_AUDIO, ID_HUDEDGES, ID_FULLSCREEN, ID_CRT,
+    ID_RES, ID_ASPECT, ID_MSAA, ID_ANISO, ID_DRAWDIST, ID_SHADOWS, ID_AUDIO, ID_PACING, ID_PACENOTE, ID_HUDEDGES, ID_FULLSCREEN, ID_CRT,
     ID_MBLUR, ID_CAM, ID_FPS, ID_HDTEX,
     ID_SKIPINTRO, ID_FASTBOOT, ID_DEBUGMENU, ID_MONEY, ID_LOGLEVEL,
     ID_PAD0, ID_PAD1, ID_PAD2, ID_PAD3, ID_KEYS,
@@ -81,6 +81,16 @@ static const struct { const char *label, *value; } k_loglevel[] = {
     {"Normal (what you did, and problems)", "info"},
     {"Detailed (for bug reports)", "debug"},
     {"Everything (large logs)", "trace"},
+};
+/* Frame pacing (RECOMP_PRESENT_TIMING): auto paces each frame to the
+ * display (even on 60/120/240 Hz and under G-Sync/FreeSync); "variable
+ * refresh" always spaces frames 1/60 s apart and never locks to the
+ * display -- for a VRR display run at 60 Hz, which auto cannot tell from a
+ * fixed 60 Hz one; legacy shows each frame as soon as it is ready. */
+static const struct { const char *label, *value; } k_pacing[] = {
+    {"Auto: paced to the display (recommended)", "auto"},
+    {"Variable refresh display (G-Sync/FreeSync)", "timed"},
+    {"Legacy: show frames when ready", "legacy"},
 };
 static const struct { const char *label, *value; } k_msaa[] = {
     {"Off", "0"},
@@ -297,6 +307,7 @@ static void load_settings(void)
     SendDlgItemMessageA(s_wnd, ID_RES, CB_SETCURSEL, ini_int("resolution", 0), 0);
     SendDlgItemMessageA(s_wnd, ID_ASPECT, CB_SETCURSEL, ini_int("aspect", 0), 0);
     SendDlgItemMessageA(s_wnd, ID_MSAA, CB_SETCURSEL, ini_int("msaa", 2), 0);
+    SendDlgItemMessageA(s_wnd, ID_PACING, CB_SETCURSEL, ini_int("pacing", 0), 0);
     SendDlgItemMessageA(s_wnd, ID_ANISO, CB_SETCURSEL, ini_int("aniso", 3), 0);
     SendDlgItemMessageA(s_wnd, ID_DRAWDIST, CB_SETCURSEL, ini_int("draw_distance", 1), 0);
     SendDlgItemMessageA(s_wnd, ID_SHADOWS, CB_SETCURSEL, ini_int("shadows", 1), 0);
@@ -324,6 +335,7 @@ static void save_settings(void)
     ini_set_int("resolution", (int)SendDlgItemMessageA(s_wnd, ID_RES, CB_GETCURSEL, 0, 0));
     ini_set_int("aspect", (int)SendDlgItemMessageA(s_wnd, ID_ASPECT, CB_GETCURSEL, 0, 0));
     ini_set_int("msaa", (int)SendDlgItemMessageA(s_wnd, ID_MSAA, CB_GETCURSEL, 0, 0));
+    ini_set_int("pacing", (int)SendDlgItemMessageA(s_wnd, ID_PACING, CB_GETCURSEL, 0, 0));
     ini_set_int("aniso", (int)SendDlgItemMessageA(s_wnd, ID_ANISO, CB_GETCURSEL, 0, 0));
     ini_set_int("draw_distance", (int)SendDlgItemMessageA(s_wnd, ID_DRAWDIST, CB_GETCURSEL, 0, 0));
     ini_set_int("shadows", (int)SendDlgItemMessageA(s_wnd, ID_SHADOWS, CB_GETCURSEL, 0, 0));
@@ -369,6 +381,9 @@ static void play(void)
     SetEnvironmentVariableA("RECOMP_WIDESCREEN", asp >= 0 && asp < (int)(sizeof k_aspect / sizeof k_aspect[0])
                                                  ? k_aspect[asp].value : "auto");
     {
+        int pc = (int)SendDlgItemMessageA(s_wnd, ID_PACING, CB_GETCURSEL, 0, 0);
+        SetEnvironmentVariableA("RECOMP_PRESENT_TIMING", pc >= 0 && pc < (int)(sizeof k_pacing / sizeof k_pacing[0])
+                                                         ? k_pacing[pc].value : "auto");
         int aa = (int)SendDlgItemMessageA(s_wnd, ID_MSAA, CB_GETCURSEL, 0, 0);
         SetEnvironmentVariableA("RECOMP_MSAA", aa >= 0 && aa < (int)(sizeof k_msaa / sizeof k_msaa[0])
                                                ? k_msaa[aa].value : NULL);
@@ -478,6 +493,34 @@ static void make_fonts(void)
     s_title = CreateFontIndirectA(&lf);
 }
 
+/* What the display the launcher is on means for 60 FPS: even on a multiple
+ * of 60 Hz; uneven on other rates unless variable refresh is on (the
+ * launcher cannot see whether it is). */
+static void pacing_note(void)
+{
+    DEVMODEA dm;
+    MONITORINFOEXA mi;
+    char text[200];
+    int hz = 0, mult;
+    memset(&mi, 0, sizeof mi);
+    mi.cbSize = sizeof mi;
+    memset(&dm, 0, sizeof dm);
+    dm.dmSize = sizeof dm;
+    if (GetMonitorInfoA(MonitorFromWindow(s_wnd, MONITOR_DEFAULTTOPRIMARY), (MONITORINFO *)&mi)
+        && EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm))
+        hz = (int)dm.dmDisplayFrequency;
+    mult = hz > 0 ? (hz + 30) / 60 : 0;
+    if (hz <= 0)
+        text[0] = 0;
+    else if (mult >= 1 && abs(hz - mult * 60) <= hz / 100 + 1)
+        snprintf(text, sizeof text, "This display runs at %d Hz: 60 FPS is shown evenly.%s", hz,
+                 hz <= 61 ? " With G-Sync/FreeSync on, pick Variable refresh display." : "");
+    else
+        snprintf(text, sizeof text, "This display runs at %d Hz: 60 FPS is shown unevenly unless "
+                 "G-Sync/FreeSync is on. Otherwise use 60 or 120 Hz.", hz);
+    SetDlgItemTextA(s_wnd, ID_PACENOTE, text);
+}
+
 static void build(void)
 {
     int y = 14, i;
@@ -532,7 +575,16 @@ static void build(void)
     cb = add("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, ID_AUDIO, 140, y, 260, 200, s_font);
     for (i = 0; i < (int)(sizeof k_audio / sizeof k_audio[0]); i++)
         SendMessageA(cb, CB_ADDSTRING, 0, (LPARAM)k_audio[i].label);
-    y += 32;
+    y += 30;
+    add("STATIC", "Frame pacing", 0, -1, 20, y + 4, 115, 20, s_font);
+    cb = add("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, ID_PACING, 140, y, 260, 200, s_font);
+    for (i = 0; i < (int)(sizeof k_pacing / sizeof k_pacing[0]); i++)
+        SendMessageA(cb, CB_ADDSTRING, 0, (LPARAM)k_pacing[i].label);
+    SendMessageA(cb, CB_SETCURSEL, 0, 0);
+    y += 28;
+    add("STATIC", "", 0, ID_PACENOTE, 140, y, 360, 34, s_font);
+    pacing_note();
+    y += 40;
     add("BUTTON", "Fullscreen (F11 toggles in game)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_FULLSCREEN, 20, y, 300, 22, s_font);
     y += 24;
     add("BUTTON", "CRT TV shader (needs a resolution above 480p)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_CRT, 20, y, 400, 22, s_font);
