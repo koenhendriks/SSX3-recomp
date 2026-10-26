@@ -20,7 +20,7 @@
 #endif
 
 /* RECOMP_VKR_STATS=1: where the backend's time goes, once a second. */
-static double s_t[6];            /* draw total, lookup+hash, decode+upload, vkr_draw, flip */
+static double s_t[8];            /* draw total, lookup+hash, decode+upload, vkr_draw, flip, -, decode, create */
 static unsigned s_n[3];          /* draws, texture creates, flips */
 static int s_stats = -1;
 
@@ -40,6 +40,9 @@ static double now_ms(void)
 #endif
 }
 
+extern double g_vkr_alloc_ms;
+extern unsigned g_vkr_allocs;
+
 static void stats_tick(void)
 {
     static double last;
@@ -48,8 +51,9 @@ static void stats_tick(void)
     if (t - last < 1000.0)
         return;
     fprintf(stderr, "[VKRSTAT] draws %u tex-creates %u flips %u | ms/s: draw-total %.0f lookup+hash %.0f"
-            " decode+upload %.0f vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
-            s_t[0], s_t[1], s_t[2], s_t[3], s_t[4]);
+            " decode+upload %.0f (decode %.0f, hd+create %.0f, of it %u vkAllocateMemory %.0f) vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
+            s_t[0], s_t[1], s_t[2], s_t[6], s_t[7], g_vkr_allocs, g_vkr_alloc_ms, s_t[3], s_t[4]);
+    g_vkr_alloc_ms = 0; g_vkr_allocs = 0;
     memset(s_t, 0, sizeof s_t); memset(s_n, 0, sizeof s_n);
     last = t;
 }
@@ -63,6 +67,12 @@ static void stats_tick(void)
 extern ptrdiff_t xbox_GetMemoryOffset(void);
 extern void *xbox_GuestToHost(uint32_t va);   /* any mapped guest range (also the web build) */
 extern void xbox_FramebufferPublishImage(const uint32_t *px, uint32_t w, uint32_t h);
+extern void xbox_FramebufferPublishImageVbl(const uint32_t *px, uint32_t w, uint32_t h, double vblank_ms);
+extern int xbox_FramebufferSharedMake(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8]);
+extern void xbox_FramebufferPublishShared(int tex, uint32_t w, uint32_t h, double vblank_ms);
+extern double xbox_FrameVblankPop(void);
+extern void xbox_FrameVblankFlush(void);
+extern double xbox_VblankLastEdgeMs(void);
 extern int ssx3_WidescreenNow(void);
 extern int ssx3_InGame(void);
 extern int ssx3_InGameMenuUp(void);
@@ -93,7 +103,8 @@ static int s_dirty;                     /* drawn since the last flip */
  * the result into the surface the title flipped, so the executor never
  * waits for the GPU to finish a frame (it did: ~5 ms a flip, a quarter of
  * its time in a race). The copy lands a few ms after the flip. */
-typedef struct { int slot; uint32_t offset, pitch, x, y, w, h; unsigned frame; int shot; } FlipJob;
+typedef struct { int slot; uint32_t offset, pitch, x, y, w, h; unsigned frame; int shot;
+                 double vblank_ms; } FlipJob;   /* vblank: its tick's, for the presenter's pacing */
 static void mbtest_write(const FlipJob *j, const uint8_t *px, uint32_t w, uint32_t h);
 static FlipJob s_jobs[4];
 static int s_job_head, s_job_n;
@@ -323,9 +334,16 @@ static void *flip_thread(void *unused)
                        px + (size_t)y * j.w * 4, (size_t)j.w * 4);
             glitch_catch(px, j.w, j.h, j.frame);
             /* Higher internal resolution: the window shows the full image. */
+            {
+                /* Copied into a shared texture on the GPU: hand it to the window. */
+                uint32_t tw, th;
+                int tex = vkr_frame_shared(s_vk, j.slot, &tw, &th);
+                if (tex >= 0)
+                    xbox_FramebufferPublishShared(tex, tw, th, j.vblank_ms);
+            }
             full = vkr_frame_pixels_full(s_vk, j.slot, &fw, &fh);
             if (full) {
-                xbox_FramebufferPublishImage((const uint32_t *)full, fw, fh);
+                xbox_FramebufferPublishImageVbl((const uint32_t *)full, fw, fh, j.vblank_ms);
                 record_frame(full, fw, fh);
             }
             if (full && j.shot)
@@ -637,7 +655,11 @@ static void bind_textures(VkrDrawState *st)
             uint32_t *px = (uint32_t *)malloc((size_t)ti.width * rows * 4);
             int rt = is_rt(ti.offset), j;
             uint64_t key = ti.hash;
-            if (px && nv2a_exec_tex_decode(k, px)) {
+            double td0 = s_stats ? now_ms() : 0;
+            int decoded = px && nv2a_exec_tex_decode(k, px);
+            if (s_stats) s_t[6] += now_ms() - td0;
+            if (decoded) {
+                double tc0 = s_stats ? now_ms() : 0;
                 /* A render target redrawn every frame: one texture per
                  * address, updated in place, not a new one per frame. */
                 VkrTex *old = NULL;
@@ -671,6 +693,7 @@ static void bind_textures(VkrDrawState *st)
                         s_nrt_tex++;
                     }
                 }
+                if (s_stats) s_t[7] += now_ms() - tc0;
             }
             free(px);
             if (s_stats) { s_t[2] += now_ms() - t1; s_n[1]++; }
@@ -993,6 +1016,16 @@ static HudGroup s_hud_groups[HUD_MAX_BOXES];   /* last frame's elements */
 static int      s_hud_ngroups;
 static int      s_hud_trace = -1, s_hud_trace_frame, s_hud_order;
 static int      s_hud_menu;                    /* a menu was up this frame */
+/* Menu or not, decided once per frame at the flip before it (be_flip), not
+ * per draw. This runs on the GPU executor, frames behind the game, and read
+ * the game's screen state live: a menu opening mid-frame, or a screen's
+ * state word read while the game changed it (briefing 4 -> 5), split one
+ * frame into half menu layout, half HUD layout -- a flicker as the briefing
+ * and the end-of-race menus came up. Held HUD_MENU_HOLD frames after the
+ * menu was last seen, so its closing frames (still in flight) and a stray
+ * read keep the middle. -1: not decided yet (the first frame). */
+#define HUD_MENU_HOLD 30
+static int      s_hud_frame_menu = -1, s_hud_menu_hold;
 static double   s_hud_trace_t;
 
 /* The layout runs in widescreen in game; with a menu up its pieces are still
@@ -1232,7 +1265,7 @@ static float hud_shift(const Nv2aVshOutput *v, uint32_t n)
     int g, menu;
     if (!n || !hud_edges_on())
         return 0.0f;
-    menu = ssx3_InGameMenuUp();
+    menu = s_hud_frame_menu >= 0 ? s_hud_frame_menu : ssx3_InGameMenuUp();
     s_hud_menu |= menu;
     for (i = 0; i < n; i++) {
         if (v[i].pos[3] != 1.0f)
@@ -2266,6 +2299,11 @@ static void be_flip(const Nv2aTarget *t)
     if (s_hud_trace < 0)
         s_hud_trace = getenv("RECOMP_HUD_TRACE") ? atoi(getenv("RECOMP_HUD_TRACE")) : 0;
     hud_build_groups();                 /* this frame's elements, for the next */
+    if (ssx3_InGameMenuUp())
+        s_hud_menu_hold = HUD_MENU_HOLD;
+    else if (s_hud_menu_hold > 0)
+        s_hud_menu_hold--;
+    s_hud_frame_menu = s_hud_menu_hold > 0;
     s_spike_frame++;
     s_hud_order = 0;
     if (s_hud_trace_frame)
@@ -2335,8 +2373,32 @@ static void be_flip(const Nv2aTarget *t)
     s_draw_total = s_draw_no;
     s_draw_no = 0;
     j.shot = mbtest_flip();
+    {
+        /* The window's shared frame textures (Windows): made, or made again
+         * at a new size, before this frame is submitted into one of them. */
+        static int full_set;
+        uint32_t sw, sh;
+        uint8_t luid[8], dluid[8];
+        void *handles[4];
+        if (!full_set) {
+            full_set = 1;
+            vkr_want_full(s_vk, getenv("RECOMP_RECORD") || getenv("RECOMP_MBLUR_TEST"));
+        }
+        if (vkr_shared_wanted(s_vk, &sw, &sh, luid)
+            && xbox_FramebufferSharedMake(sw, sh, handles, dluid) == 4)
+            vkr_shared_import(s_vk, handles, sw, sh, dluid);
+    }
     j.slot = vkr_flip_submit(s_vk);
     j.frame = s_draw_frame++;
+    /* The vblank of the tick this frame was rendered for (pushed by the
+     * renderer's present, ssx3_overrides.c sub_001F3020): one per flip. One
+     * more than 100 ms behind the grid is from a stretch where presents and
+     * flips did not pair up: start over from now. */
+    j.vblank_ms = xbox_FrameVblankPop();
+    if (j.vblank_ms > 0.0 && xbox_VblankLastEdgeMs() - j.vblank_ms > 100.0) {
+        xbox_FrameVblankFlush();
+        j.vblank_ms = 0.0;
+    }
     s_gl_ord = 0;
     if (s_stats) { s_t[4] += now_ms() - tf; s_n[2]++; }
     if (j.slot < 0)

@@ -213,9 +213,10 @@ static void settings_lines(void)
         res_words(res, sizeof res), aspect_words(),
         env_or("RECOMP_MSAA", "4"), env_or("RECOMP_ANISO", "16"), env_or("RECOMP_DRAW_DIST", "1.5"),
         env_or("RECOMP_SHADOW_RES", "4"));
-    ADD(" audio %s channels, %s, HD textures %s, HUD at the edges %s",
+    ADD(" audio %s channels, %s, HD textures %s, HUD at the edges %s, frame pacing %s",
         env_or("RECOMP_AUDIO_CHANNELS", "2"), env_on("RECOMP_FULLSCREEN", 0) ? "fullscreen" : "windowed",
-        hd && hd[0] == '0' && !hd[1] ? "off" : "on", env_on("RECOMP_HUD_EDGES", 1) ? "on" : "off");
+        hd && hd[0] == '0' && !hd[1] ? "off" : "on", env_on("RECOMP_HUD_EDGES", 1) ? "on" : "off",
+        env_or("RECOMP_PRESENT_TIMING", "auto"));
     log_msg(LOG_INFO, "SETTINGS", "%s", buf);
     n = 0;
     ADD("CRT %s, FPS counter %s, motion blur %s, modern camera %s, skip intro %s, fast boot %s,",

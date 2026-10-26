@@ -187,6 +187,8 @@ static volatile int s_pump_waiting, s_pump_reads;
 #endif
 
 static const struct { const char *tag; int level; } k_tags[] = {
+    /* only with RECOMP_FRAME_STATS (opt-in): kept at a player's level */
+    {"[FRAMES]", LOG_INFO}, {"[GLASS]", LOG_INFO}, {"[HOLDSTACK]", LOG_INFO}, {"[PRESENT-SLOW]", LOG_INFO},
     /* C9: the always-on diagnostics; opt-in traces stay DEBUG (the default
      * for any [TAG] line) */
     {"[NV2A-WARN]", LOG_WARN}, {"[APU-WARN]", LOG_WARN}, {"[ABI]", LOG_WARN},
@@ -235,7 +237,33 @@ static void out(const char *p, size_t n)
 {
 #ifdef _WIN32
     DWORD w;
-    WriteFile(s_pump_out, p, (DWORD)n, &w, NULL);
+    {
+        /* RECOMP_LOG_WRITE_STATS=1: the slowest file write, said every 5 s
+         * (a stalled write fills the pipe and every thread that logs waits) */
+        static int stats = -1;
+        static LARGE_INTEGER f, last_say;
+        static double worst;
+        LARGE_INTEGER a, b;
+        if (stats < 0) {
+            stats = getenv("RECOMP_LOG_WRITE_STATS") != NULL;
+            QueryPerformanceFrequency(&f);
+        }
+        if (stats) QueryPerformanceCounter(&a);
+        WriteFile(s_pump_out, p, (DWORD)n, &w, NULL);
+        if (stats) {
+            double ms;
+            QueryPerformanceCounter(&b);
+            ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+            if (ms > worst) worst = ms;
+            if ((double)(b.QuadPart - last_say.QuadPart) / (double)f.QuadPart >= 5.0) {
+                char line[96];
+                int k = snprintf(line, sizeof line, "[LOGPUMP] slowest log file write in 5 s: %.1f ms\r\n", worst);
+                last_say = b;
+                worst = 0;
+                WriteFile(s_pump_out, line, (DWORD)k, &w, NULL);
+            }
+        }
+    }
 #else
     while (n) {
         ssize_t w = write(s_pump_out, p, n);

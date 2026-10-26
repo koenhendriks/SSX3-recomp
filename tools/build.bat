@@ -5,7 +5,7 @@ rem compile them one at a time (the template sets no /MP).
 rem   tools\build.bat [jobs] [abi]   (default: all logical cores) -> build\ssx3_recomp.exe
 rem   "abi" builds build-abi\ with -DRECOMP_ABI_CHECK: every call checks that
 rem   the callee preserved ebx/esi/edi and logs "[ABI] sub_XXXXXXXX" when not.
-setlocal
+setlocal EnableDelayedExpansion
 set JOBS=%1
 if "%JOBS%"=="" set JOBS=%NUMBER_OF_PROCESSORS%
 set DIR=build
@@ -18,10 +18,10 @@ rem Any Visual Studio 2022 edition (Community, Professional, Build Tools, ...)
 rem with the C++ workload: vswhere finds it.
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "VSDIR="
-if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+if exist "!VSWHERE!" for /f "usebackq delims=" %%i in (`"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
 if not defined VSDIR set "VSDIR=C:\Program Files\Microsoft Visual Studio\2022\Community"
 if not exist "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" (
-    echo Visual Studio with the C++ workload not found ^(looked in %VSDIR%^) 1>&2
+    echo Visual Studio with the C++ workload not found ^(looked in !VSDIR!^) 1>&2
     exit /b 1
 )
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1

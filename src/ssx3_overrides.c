@@ -9,8 +9,8 @@
  * the way recomp_manual.c does: the registers are thread-local, and a plain
  * `extern uint32_t g_eax` names the TLS template, not the running thread's copy.
  */
-#ifdef _WIN32
 #include "log.h"
+#ifdef _WIN32
 #include <windows.h>
 #else
 #include "platform/win32_compat.h"
@@ -2446,6 +2446,33 @@ void sub_0023BA20(void)
 }
 
 /*
+ * D3D's vblank DPC (sub_0023B490, thiscall, [this] = the NV2A register
+ * base), wrapped so its acknowledge does not wait on a polling thread. At
+ * 0x0023B540 it writes 1 to PCRTC_INTR_0 and spins until PMC_INTR_0 bit 24
+ * drops. On hardware that write clears it at once; here nv2a_intr_thread
+ * (toolkit) sees the write on its next Sleep(1) poll -- and when Windows
+ * does not wake that thread for a quantum or two, the DPC spins 26-29 ms on
+ * the timer thread holding the guest CPU, and the game stops (17 times in a
+ * 90 s race, CLAUDE.md "FPS DROPS"). The interrupt is already being
+ * serviced, so its PMC bit is cleared before the DPC runs.
+ * RECOMP_VBLANK_FAST_ACK=0 = the old wait.
+ */
+extern void sub_0023B490_gen(void);
+
+void sub_0023B490(void)
+{
+    static int on = -1;
+    uint32_t regs = MEM32(g_ecx);
+    if (on < 0) {
+        const char *e = getenv("RECOMP_VBLANK_FAST_ACK");
+        on = !(e && e[0] == '0');
+    }
+    if (on && regs >= 0xFD000000u && regs < 0xFE000000u)
+        ST32(regs + 0x100, MEM32(regs + 0x100) & ~0x01000000u);
+    sub_0023B490_gen();
+}
+
+/*
  * EA's allocator (sub_001A9BD0, ~300 direct callers), wrapped to report
  * failures. The race load (Snow Jam) ends up using a NULL script register
  * array allocated in sub_0016B4F0; this says whether the heap -- a fixed
@@ -2549,6 +2576,85 @@ TRACED(sub_001ADF90)
 TRACED(sub_000E1AE0)
 TRACED_RET(sub_000E1A80)
 TRACED_RET(sub_000D7460)
+
+/*
+ * The frame timer on the vblank grid (RECOMP_VBLANK_SYNC=display, unless
+ * RECOMP_PRESENT_TIMING=legacy). sub_001AE030 (thiscall, the frame-timer
+ * object) runs one game tick (sub_001AD720), then re-arms its one-shot
+ * timer for a whole number of milliseconds -- 16 or 17, with its own carry
+ * (+0x18) -- so ticks came 14-19 ms apart. Around it the toolkit puts the
+ * re-arm on the grid's next edge (xbox_KeSetTimerSnapToVblank): ticks are
+ * one grid period apart, the display's own when the grid is locked to it.
+ * Locked to a 59.94 Hz display the game's millisecond carry drifts by
+ * 0.017 ms a tick and would reach its catch-up path (a double tick) every
+ * ~14 s; a carry that has drifted past 4 ms, short of a real stall (one
+ * period), is set back to 0. A real stall still catches up as before.
+ */
+extern void sub_001AE030_gen(void);
+extern void xbox_KeSetTimerSnapToVblank(int on);
+extern double xbox_VblankTickEdgeMs(void);
+extern void xbox_FrameVblankPush(double ms);
+
+/* The grid edge the latest frame-timer tick belongs to (the last edge at or
+ * before its wake-up, xbox_VblankTickEdgeMs). */
+static volatile double ssx3_tick_vblank_ms;
+
+/*
+ * The renderer's flush/present (sub_001F3020, renderer vtable +0x50, once
+ * per rendered frame on the game's thread): the frame's vblank, the edge of
+ * the tick it was rendered for, goes to the presenter in flip order
+ * (xbox_FrameVblankPush; vkr_backend.c pops one per flip).
+ */
+extern void sub_001F3020_gen(void);
+
+void sub_001F3020(void)
+{
+    xbox_FrameVblankPush(ssx3_tick_vblank_ms);
+    sub_001F3020_gen();
+}
+extern int xbox_VblankLocked(void);
+
+void sub_001AE030(void)
+{
+    static int on = -1;
+    uint32_t self = g_ecx;
+    if (on < 0) {
+        const char *s = getenv("RECOMP_VBLANK_SYNC"), *p = getenv("RECOMP_PRESENT_TIMING");
+        on = s && !strcmp(s, "display") && !(p && !strcmp(p, "legacy"));
+    }
+    if (!on) {
+        sub_001AE030_gen();
+        return;
+    }
+    if (xbox_VblankLocked()) {
+        float carry = MEMF(self + 0x18), period = MEMF(self + 0x1C);
+        if (carry < -4.0f && carry > -period)
+            MEMF(self + 0x18) = 0.0f;
+    }
+    {
+        /* RECOMP_RING_STATS=1: every 600 ticks (10 s), how many input
+         * samples wait in the 30-entry ring (input manager [0x36952C], read
+         * +0x2EE0, write +0x2EE4): a ring that fills means the sampler runs
+         * faster than the ticks and input lag grows. */
+        static int on = -1;
+        static unsigned n, most;
+        uint32_t im = MEM32(0x0036952Cu);
+        if (on < 0)
+            on = getenv("RECOMP_RING_STATS") != NULL;
+        if (on && im >= 0x10000u) {
+            unsigned d = (MEM32(im + 0x2EE4) + 30u - MEM32(im + 0x2EE0)) % 30u;
+            if (d > most) most = d;
+            if (++n % 600 == 0) {
+                fprintf(stderr, "[RING] input samples waiting: now %u, most in 10 s %u\n", d, most);
+                most = 0;
+            }
+        }
+    }
+    xbox_KeSetTimerSnapToVblank(1);
+    ssx3_tick_vblank_ms = xbox_VblankTickEdgeMs();   /* this tick's own edge */
+    sub_001AE030_gen();
+    xbox_KeSetTimerSnapToVblank(0);
+}
 
 /* RECOMP_FRAMETIMER_STATS=1: how regularly the frame timer's callback
  * (sub_001AE020, a one-shot XAPI timer the game re-arms every 1000/60 ms
