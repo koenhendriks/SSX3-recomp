@@ -1110,6 +1110,34 @@ All env defaults are set in `src/main.c` only when unset, so a run can override 
   outlier triangles), RECOMP_DRAWLOG=<a>-<b> (every CPU-path draw; slows the
   game enough to change what it draws). work\probe\hudrun.ps1 -Extra
   'K=V;K=V' -Ws 0 runs the freestyle event with extra settings.
+- FPS DROPS (2026-10-26, owner: drops into the 40s on a Ryzen 7 9800X3D +
+  RTX 5090 at 4K; reproduced on the dev PC, Ryzen 9 3900X + RTX 2080 Ti,
+  under background CPU load). bench 60-90 s Snow Jam, 1440p: 54.6-58.5 FPS
+  average, worst frames 52-86 ms; 4K: 59.6 FPS, worst 67 ms. NOT the GPU:
+  RECOMP_VKR_GPUPROF shows 2.8-3.6 ms per frame at 1440p, 6.3-7.3 ms at 4K.
+  Not the frame timer either: it fires 60/s (14-19 ms) while only 47-49
+  frames/s are drawn in the slow seconds. RECOMP_SLOW_STACKS=30 (90 s,
+  slowstacks.py): the main thread waits on the emulated GPU in every slow
+  frame -- 28x D3D's kickoff spin (sub_00234A10, PFB flush bit 0x100410),
+  12x BlockOnTime (sub_00234BE0) -- and in 23 of them the executor is IDLE.
+  Two host threads that answer the title's register handshakes poll with
+  Sleep(1) and are sometimes not woken for 15-30 ms (a scheduler quantum or
+  two), while the title spins waiting on them:
+  (1) nv2a_intr_thread (xbox_memory_layout.c) emulates the write-1-to-clear
+  of the vblank interrupt; D3D's vblank DPC sub_0023B490 spins at
+  0x0023B540 until PMC_INTR bit 24 drops -- on the timer thread, holding the
+  guest CPU: 17 holds of 26-29 ms in 90 s ([HOLDSTACK] held26ms ...
+  sub_0023B490 < sub_0023BC60 < kernel_run_dpc < kernel_timer_thread). The
+  game cannot run during them.
+  (2) nv2a_reg_ack_thread clears the PFB flush bit, spinning for 2 ms after
+  a kickoff and then Sleep(1)-polling: the first kickoff after a quiet spell
+  waits for its wake-up.
+  Also seen, less often: CPU DXT decode / texture creation on the executor
+  (nv2a_exec_tex_decode, vkr_tex_create_ex) for textures seen the first
+  time, a pipeline compile, and log writes (fprintf on the timer thread held
+  the guest CPU 661 ms once, in diag mode). Fix plan: the DPC's spin and
+  the ack threads' wake-ups (priority + no Sleep(1) polling); then
+  re-measure; textures if they still show.
 - Untranslated instructions reached (no-ops): `wbinvd`, `out`/`in`, `ldmxcsr`.
 - Upstream candidates: the toolkit fixes in `patches/`; `tools.split`
   ignoring applied names (docs/DECOMP.md says otherwise); template

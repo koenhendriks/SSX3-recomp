@@ -30,6 +30,8 @@
 #else
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <time.h>
 #define mkdir_one(p) mkdir(p, 0755)
 #endif
 #include "vkr.h"
@@ -39,7 +41,16 @@ static int s_init;
 static char s_dump_dir[512];
 static char s_hd_dir[512];
 
-typedef struct { uint64_t key; char *file; int failed; uint32_t flags; } MapEntry;
+/* state: HD_NONE until someone claims the entry, HD_LOADING while its file
+ * is read, then HD_READY (data/len/w/h/mips hold the BC7 levels) or
+ * HD_FAILED. The preload thread claims entries in order; the executor
+ * claims one the preload has not reached yet and reads it itself. */
+enum { HD_NONE, HD_LOADING, HD_READY, HD_FAILED };
+typedef struct {
+    uint64_t key; char *file; uint32_t flags;
+    volatile long state;
+    uint8_t *data; size_t len; uint32_t w, h, mips;
+} MapEntry;
 static MapEntry *s_map;
 static size_t s_nmap;
 
@@ -47,6 +58,22 @@ static uint64_t *s_dumped;       /* open addressing; 0 = empty */
 static size_t s_dumped_cap, s_ndumped;
 
 static unsigned s_hd_loaded, s_hd_fail;
+
+static double now_ms_hd(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER f;
+    LARGE_INTEGER c;
+    if (!f.QuadPart)
+        QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+#endif
+}
 
 static int cmp_entry(const void *a, const void *b)
 {
@@ -93,7 +120,9 @@ static void load_map(const char *dir)
         }
         s_map[s_nmap].key = key;
         s_map[s_nmap].file = strdup(name);
-        s_map[s_nmap].failed = 0;
+        s_map[s_nmap].state = HD_NONE;
+        s_map[s_nmap].data = NULL;
+        s_map[s_nmap].len = 0;
         s_nmap++;
     }
     fclose(f);
@@ -153,6 +182,8 @@ static void default_dir(char *out, size_t n)
     snprintf(out, n, "hd-textures");
 }
 
+static void preload_start(void);
+
 static void init(void)
 {
     const char *e;
@@ -172,6 +203,7 @@ static void init(void)
     else
         default_dir(s_hd_dir, sizeof s_hd_dir);
     load_map(s_hd_dir);
+    preload_start();
 }
 
 int hdtex_active(void)
@@ -251,23 +283,27 @@ static MapEntry *find(uint64_t key)
     return lo < s_nmap && s_map[lo].key == key ? &s_map[lo] : NULL;
 }
 
-/* 1 created (*out), 0 not mapped (or a bad file), -1 mapped but not now. */
-int hdtex_get(VkrContext *vk, uint64_t key, uint64_t cache_key, VkrTex **out)
+#ifdef _WIN32
+#define HD_CAS(p, from, to) (InterlockedCompareExchange((volatile LONG *)(p), (to), (from)) == (from))
+#define HD_SET(p, v)        InterlockedExchange((volatile LONG *)(p), (v))
+#define HD_GET(p)           InterlockedCompareExchange((volatile LONG *)(p), 0, 0)
+#else
+#define HD_CAS(p, from, to) __sync_bool_compare_and_swap((p), (from), (to))
+#define HD_SET(p, v)        __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
+#define HD_GET(p)           __atomic_load_n((p), __ATOMIC_SEQ_CST)
+#endif
+
+/* Read e's DDS (a BC7 DX10 file) into e->data. 1 on success. */
+static int read_entry(MapEntry *e)
 {
-    MapEntry *e;
     char path[1100];
     FILE *f;
     uint8_t hdr[148];
-    uint8_t *data;
     long size;
-    uint32_t w, h, mips, dxgi;
-    init();
-    if (!s_nmap || !(e = find(key)) || e->failed || !vkr_has_bc7(vk))
-        return 0;
+    uint32_t dxgi;
     snprintf(path, sizeof path, "%s/%s", s_hd_dir, e->file);
     if (!(f = fopen(path, "rb"))) {
         fprintf(stderr, "[HDTEX] cannot open %s\n", path);
-        e->failed = 1; s_hd_fail++;
         return 0;
     }
     fseek(f, 0, SEEK_END);
@@ -277,31 +313,125 @@ int hdtex_get(VkrContext *vk, uint64_t key, uint64_t cache_key, VkrTex **out)
         || memcmp(hdr + 84, "DX10", 4)) {
         fclose(f);
         log_msg(LOG_WARN, "HDTEX", "%s: not a DX10 DDS", e->file);
-        e->failed = 1; s_hd_fail++;
         return 0;
     }
-    memcpy(&h, hdr + 12, 4); memcpy(&w, hdr + 16, 4);
-    memcpy(&mips, hdr + 28, 4); memcpy(&dxgi, hdr + 128, 4);
-    if (!mips)
-        mips = 1;
+    memcpy(&e->h, hdr + 12, 4); memcpy(&e->w, hdr + 16, 4);
+    memcpy(&e->mips, hdr + 28, 4); memcpy(&dxgi, hdr + 128, 4);
+    if (!e->mips)
+        e->mips = 1;
     if (dxgi != 98 && dxgi != 99) {
         fclose(f);
         log_msg(LOG_WARN, "HDTEX", "%s: DXGI format %u, only BC7 (98/99) is supported", e->file, dxgi);
-        e->failed = 1; s_hd_fail++;
         return 0;
     }
-    data = (uint8_t *)malloc((size_t)(size - 148));
-    if (!data || fread(data, 1, (size_t)(size - 148), f) != (size_t)(size - 148)) {
-        fclose(f); free(data);
-        e->failed = 1; s_hd_fail++;
+    e->len = (size_t)(size - 148);
+    e->data = (uint8_t *)malloc(e->len);
+    if (!e->data || fread(e->data, 1, e->len, f) != e->len) {
+        fclose(f);
+        free(e->data);
+        e->data = NULL;
         return 0;
     }
     fclose(f);
-    *out = vkr_tex_create_bc7(vk, cache_key, w, h, mips, data, (size_t)(size - 148), e->flags);
-    free(data);
+    return 1;
+}
+
+/* Load e unless another thread has claimed it; its state afterwards. */
+static long claim_and_load(MapEntry *e)
+{
+    if (HD_CAS(&e->state, HD_NONE, HD_LOADING)) {
+        int ok = read_entry(e);
+        if (!ok)
+            s_hd_fail++;
+        HD_SET(&e->state, ok ? HD_READY : HD_FAILED);
+    }
+    return HD_GET(&e->state);
+}
+
+/* 1 created (*out), 0 not mapped (or a bad file), -1 mapped but not now
+ * (the preload thread is reading it, or the frame's staging buffer is full). */
+int hdtex_get(VkrContext *vk, uint64_t key, uint64_t cache_key, VkrTex **out)
+{
+    MapEntry *e;
+    long st;
+    init();
+    if (!s_nmap || !(e = find(key)) || !vkr_has_bc7(vk))
+        return 0;
+    st = claim_and_load(e);
+    if (st == HD_LOADING)
+        return -1;
+    if (st != HD_READY)
+        return 0;
+    *out = vkr_tex_create_bc7(vk, cache_key, e->w, e->h, e->mips, e->data, e->len, e->flags);
     if (!*out)
         return -1;                     /* the frame's staging buffer is full */
     if (++s_hd_loaded <= 8 || (s_hd_loaded & 63) == 0)
-        log_msg(LOG_DEBUG, "HDTEX", "%u loaded (%s, %ux%u, %u mips)", s_hd_loaded, e->file, w, h, mips);
+        log_msg(LOG_DEBUG, "HDTEX", "%u loaded (%s, %ux%u, %u mips)", s_hd_loaded, e->file, e->w, e->h, e->mips);
+    return 1;
+}
+
+/* The preload (RECOMP_HDTEX_PRELOAD=0: off, files are read at first use):
+ * the whole pack read into memory once, in the background from the first
+ * texture on, so the GPU executor never waits for the disk -- a file read
+ * at first use stalled the frame it was needed in (a 219 ms frame at a
+ * race's start, more as the course came into view). */
+static volatile long s_preload_done;
+
+#ifdef _WIN32
+static DWORD WINAPI preload_thread(LPVOID unused)
+#else
+static void *preload_thread(void *unused)
+#endif
+{
+    size_t i, bytes = 0, n = 0;
+    double t0 = now_ms_hd();
+    (void)unused;
+    for (i = 0; i < s_nmap; i++)
+        if (claim_and_load(&s_map[i]) == HD_READY) {
+            bytes += s_map[i].len;
+            n++;
+        }
+    log_msg(LOG_INFO, "HDTEX", "preloaded %zu textures (%zu MB) in %.0f ms",
+            n, bytes >> 20, now_ms_hd() - t0);
+    HD_SET(&s_preload_done, 1);
+    return 0;
+}
+
+static void preload_start(void)
+{
+    const char *e = getenv("RECOMP_HDTEX_PRELOAD");
+    if (!s_nmap || (e && e[0] == '0')) {
+        HD_SET(&s_preload_done, 1);
+        return;
+    }
+#ifdef _WIN32
+    {
+        HANDLE th = CreateThread(NULL, 0, preload_thread, NULL, 0, NULL);
+        if (!th) { HD_SET(&s_preload_done, 1); return; }
+        SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
+        CloseHandle(th);
+    }
+#else
+    {
+        pthread_t th;
+        if (pthread_create(&th, NULL, preload_thread, NULL)) { HD_SET(&s_preload_done, 1); return; }
+        pthread_detach(th);
+    }
+#endif
+}
+
+int hdtex_preload_wait(unsigned timeout_ms)
+{
+    double t0 = now_ms_hd();
+    init();
+    while (!HD_GET(&s_preload_done)) {
+        if (now_ms_hd() - t0 > timeout_ms)
+            return 0;
+#ifdef _WIN32
+        Sleep(1);
+#else
+        usleep(1000);
+#endif
+    }
     return 1;
 }
