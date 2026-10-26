@@ -1112,6 +1112,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             const char *sys = getenv("RECOMP_SYSTEM_DIR");
             xbox_path_init(s_game_dir, sys && *sys ? sys : NULL);
         }
+        /* Asset mods: read by xbox_path_init (mods/load-order.txt, docs/MODS.md). */
+        {
+            extern int xbox_mods_count(void);
+            extern const char *xbox_mods_name(int i);
+            char list[512];
+            size_t n = 0;
+            int i;
+            list[0] = '\0';
+            for (i = 0; i < xbox_mods_count() && n < sizeof list; i++)
+                n += (size_t)snprintf(list + n, sizeof list - n, "%s%s", i ? ", " : "", xbox_mods_name(i));
+            log_msg(LOG_INFO, "SETTINGS", "asset mods: %s", xbox_mods_count() ? list : "none");
+        }
     }
 
     /* Step 5: Initialize kernel bridge (thunk table in Xbox memory) */

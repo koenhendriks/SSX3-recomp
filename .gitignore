@@ -34,6 +34,8 @@ src/recomp/gen/
 
 # Game files (user must provide their own legally-owned copies)
 game/
+# Asset mods are the player's own (docs/MODS.md)
+/mods/
 *.xbe
 *.iso
 *.xiso
@@ -79,6 +81,9 @@ disk/
 build-linux/
 /game
 build-linux-abi/
+build-portable/
+build-portable-spv/
+build-portable.cmake.log
 build-vk/
 build-linux/
 tk/

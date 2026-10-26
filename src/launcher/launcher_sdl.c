@@ -26,6 +26,7 @@
 #endif
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include "mods_list.h"
 #include <fontconfig/fontconfig.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -522,6 +523,60 @@ static void message(const char *text)
 
 /* Replaces the launcher with the game, which inherits its settings through
  * the environment. Returns only on failure. */
+/* The game's working directory holds hd-textures/, mods/ and keys.ini: the
+ * launcher's folder in a release, its parent in the source tree (build-linux/). */
+static void game_cwd(char *out, size_t n)
+{
+    char here[PATH_MAX + 16], up[PATH_MAX + 32];
+    snprintf(out, n, "%s", s_dir);
+    snprintf(here, sizeof here, "%s/hd-textures", s_dir);
+    snprintf(up, sizeof up, "%s/../hd-textures", s_dir);
+    if (!dir_exists(here) && dir_exists(up))
+        snprintf(out, n, "%s/..", s_dir);
+}
+
+/* ---- asset mods: mods/load-order.txt, read by the game (docs/MODS.md) ----- */
+
+static ModEntry s_mods[MODS_LIST_MAX];
+static int s_nmods;
+
+/* The folder the game reads: RECOMP_MODS_DIR (from the game's folder) or mods/. */
+static void mods_dir(char *out, size_t n)
+{
+    const char *e = getenv("RECOMP_MODS_DIR");
+    char cwd[PATH_MAX + 16];
+    game_cwd(cwd, sizeof cwd);
+    if (e && *e == '/')
+        snprintf(out, n, "%s", e);
+    else
+        snprintf(out, n, "%s/%s", cwd, e && *e ? e : "mods");
+}
+
+static void mods_scan(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    s_nmods = mods_list_scan(dir, s_mods, MODS_LIST_MAX);
+}
+
+static void mods_save(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    mods_list_save(dir, s_mods, s_nmods);
+}
+
+static void open_mods(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    mkdir(dir, 0755);
+    {
+        char *argv[] = { "xdg-open", dir, NULL };
+        spawn_detached(argv);
+    }
+}
+
 static void play(void)
 {
     char exe[PATH_MAX + 16], cwd[PATH_MAX + 16], buf[64];
@@ -535,7 +590,8 @@ static void play(void)
         return;
     }
     save_settings();
-    have_dm = SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(s_win), &dm) == 0 && dm.h > 0;
+    /* --play has no window: the main display then. */
+    have_dm = SDL_GetDesktopDisplayMode(s_win ? SDL_GetWindowDisplayIndex(s_win) : 0, &dm) == 0 && dm.h > 0;
 
     env_set("RECOMP_GAME_DIR", s_path);
     env_set("RECOMP_KEYBOARD", "1");
@@ -569,16 +625,8 @@ static void play(void)
         env_set("RECOMP_USB_PADS", buf);
     }
 
-    /* The working directory holds hd-textures/ and keys.ini: the launcher's
-     * folder in a release, its parent in the source tree (build-linux/). */
-    snprintf(cwd, sizeof cwd, "%s", s_dir);
-    {
-        char here[PATH_MAX + 16], up[PATH_MAX + 32];
-        snprintf(here, sizeof here, "%s/hd-textures", s_dir);
-        snprintf(up, sizeof up, "%s/../hd-textures", s_dir);
-        if (!dir_exists(here) && dir_exists(up))
-            snprintf(cwd, sizeof cwd, "%s/..", s_dir);
-    }
+    game_cwd(cwd, sizeof cwd);
+    mods_save();
 
     if (!isatty(STDERR_FILENO)) {
         char logs[PATH_MAX], path[PATH_MAX + 64];
@@ -941,6 +989,38 @@ static int draw_form(int *want_play)
     combo(W_LOGLEVEL, CX, y, CW, RH, k_loglevel, N(k_loglevel), &s_loglevel);
     y += RH + 12;
 
+    heading("Asset mods", L, y);
+    y += 24;
+    if (!s_nmods) {
+        y += text(s_font, "No mods yet. A mod is a folder in mods/ that mirrors the game folder "
+                          "(data/...), and can bring a textures/ pack (docs/MODS.md).",
+                  L, y, C_DIM, 0, WIN_W - 2 * L);
+        y += 6;
+    } else {
+        y += text(s_font, "Lower in the list wins when two mods change the same file.",
+                  L, y, C_DIM, 0, WIN_W - 2 * L);
+        y += 4;
+    }
+    for (i = 0; i < s_nmods; i++, y += 26) {
+        checkbox(L, y, WIN_W - 2 * L - 130, s_mods[i].label, &s_mods[i].on);
+        if (button(WIN_W - L - 122, y, 58, 22, "Up", 0, i > 0)) {
+            ModEntry tmp = s_mods[i - 1];
+            s_mods[i - 1] = s_mods[i];
+            s_mods[i] = tmp;
+        }
+        if (button(WIN_W - L - 58, y, 58, 22, "Down", 0, i + 1 < s_nmods)) {
+            ModEntry tmp = s_mods[i + 1];
+            s_mods[i + 1] = s_mods[i];
+            s_mods[i] = tmp;
+        }
+    }
+    y += 4;
+    if (button(L, y, 150, 28, "Open mods folder", 0, 1))
+        open_mods();
+    if (button(L + 160, y, 90, 28, "Refresh", 0, 1))
+        mods_scan();
+    y += 28 + 16;
+
     heading("Controllers", L, y);
     y += 24;
     for (i = 0; i < 4; i++, y += 21)
@@ -1017,13 +1097,33 @@ int main(int argc, char **argv)
 {
     char *slash;
     int running = 1, height = 760;
-    (void)argc;
-
     if (!realpath("/proc/self/exe", s_dir) && !realpath(argv[0], s_dir))
         snprintf(s_dir, sizeof s_dir, ".");
     if ((slash = strrchr(s_dir, '/')) != NULL)
         *slash = 0;
     snprintf(s_ini, sizeof s_ini, "%s/launcher.ini", s_dir);
+
+    /* --play: the saved settings, straight into the game, no window -- for a
+     * desktop "Play" icon or Steam's gaming mode, where only a controller is at
+     * hand. The same steps as the Play button. */
+    if (argc > 1 && !strcmp(argv[1], "--play")) {
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
+            fprintf(stderr, "launcher: SDL_Init: %s\n", SDL_GetError());
+            return 1;
+        }
+        ini_load();
+        load_settings();
+        mods_scan();                    /* play() saves the mod list: read it first */
+        update_pads();
+        update_status();
+        if (!s_game_ok) {
+            fprintf(stderr, "launcher: %s\n", s_status);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SSX 3", s_status, NULL);
+            return 1;
+        }
+        play();                         /* returns only if the game could not start */
+        return 1;
+    }
 
     if (!getenv("SDL_VIDEO_WAYLAND_WMCLASS") && !getenv("SDL_VIDEO_X11_WMCLASS")) {
         setenv("SDL_VIDEO_WAYLAND_WMCLASS", "ssx3-launcher", 1);
@@ -1057,6 +1157,7 @@ int main(int argc, char **argv)
 
     ini_load();
     load_settings();
+    mods_scan();
     update_pads();
     {
         /* Size the window to the form: one layout pass while hidden. */

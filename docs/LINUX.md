@@ -24,6 +24,31 @@ plus the Vulkan headers and glslc for the renderer (Arch: `vulkan-headers`,
 `shaderc`). Tested on aarch64 (Asahi) with GCC 16 and on x86-64 (Arch,
 GCC, NVIDIA RTX 4080 SUPER).
 
+## One folder for another Linux machine
+
+`tools/portable/` makes a folder that runs on any x86-64 Linux with glibc 2.31 or newer and a Vulkan 1.3 loader
+and driver (SteamOS, Bazzite, Ubuntu 22.04+, Fedora, Arch; not Debian 11, whose loader is 1.2), with nothing to
+install:
+
+```bash
+tools/portable/prepare_spv.sh                  # shaders, from build-linux (needs glslc)
+tools/portable/build_portable.sh               # compile in Valve's Steam Runtime 3 "sniper" SDK (podman)
+podman run --rm -v "$PWD:$PWD:z" -w "$PWD" registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest \
+    sh tools/portable/collect_libs.sh build-portable /tmp/ssx3-out
+tools/portable/make_bundle.sh /tmp/ssx3-out ~/Games/SSX3
+```
+
+The folder has `Play SSX 3.sh` (`launcher --play`: the saved settings, straight into the game, no window; add it
+to Steam as a non-Steam game), `SSX 3 Settings.sh` (the launcher), `install-shortcuts.sh` (app-menu entries),
+and `bin/ lib/ game/ hd-textures/ mods/`. `lib/` holds every library except glibc, the Vulkan loader and the
+display and sound stack. sdl2-compat loads SDL3 with dlopen, so `ldd` does not list it: `collect_libs.sh` adds
+SDL3 by name, with the libraries SDL3 links (libdecor among them). The folder holds your game files: keep it to yourself.
+
+Checked (2026-10-25): headless races in plain Ubuntu 24.04 (llvmpipe, Vulkan 1.4, loader 1.3.275) and 22.04
+(llvmpipe, Vulkan 1.3) containers, and on Fedora 44 with RADV. The game fetches `vkCmdPushDescriptorSet` from the
+device, because loaders before 1.4 do not export it (the game stopped at its first draw with `undefined symbol`),
+and uses `VK_KHR_push_descriptor` on a Vulkan 1.3 driver.
+
 ## Status x86-64 (2026-10-20)
 
 Boot -> menus -> race load -> briefing in ~15 s with `RECOMP_AUTONAV=race`, then

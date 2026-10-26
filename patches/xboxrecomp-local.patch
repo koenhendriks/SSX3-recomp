@@ -1,7 +1,7 @@
-diff --git a/src/apu/CMakeLists.txt b/src/apu/CMakeLists.txt
+diff --git c/src/apu/CMakeLists.txt w/src/apu/CMakeLists.txt
 index 0bd4ebd..70568cb 100644
---- a/src/apu/CMakeLists.txt
-+++ b/src/apu/CMakeLists.txt
+--- c/src/apu/CMakeLists.txt
++++ w/src/apu/CMakeLists.txt
 @@ -40,6 +40,9 @@ if(WIN32)
      # target to actually call into the APU failed at link with an undefined
      # XAudio2Create rather than at build time here.
@@ -12,10 +12,10 @@ index 0bd4ebd..70568cb 100644
  else()
      # Linux: platform layer (Win32 primitives on POSIX) + SDL2 audio + libm
      find_package(SDL2 REQUIRED)
-diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
+diff --git c/src/apu/apu_core.c w/src/apu/apu_core.c
 index 258048c..9760f17 100644
---- a/src/apu/apu_core.c
-+++ b/src/apu/apu_core.c
+--- c/src/apu/apu_core.c
++++ w/src/apu/apu_core.c
 @@ -20,6 +20,7 @@
   */
  
@@ -310,10 +310,10 @@ index 258048c..9760f17 100644
      /* Start background frame thread */
      qemu_thread_create(&d->apu_thread, "mcpx.apu_thread",
                         mcpx_apu_frame_thread, d, QEMU_THREAD_JOINABLE);
-diff --git a/src/apu/apu_dsp.c b/src/apu/apu_dsp.c
+diff --git c/src/apu/apu_dsp.c w/src/apu/apu_dsp.c
 index 7156be9..622dbb0 100644
---- a/src/apu/apu_dsp.c
-+++ b/src/apu/apu_dsp.c
+--- c/src/apu/apu_dsp.c
++++ w/src/apu/apu_dsp.c
 @@ -23,8 +23,13 @@
   */
  
@@ -408,10 +408,10 @@ index 7156be9..622dbb0 100644
                      if (b & 1) right += mixbins[b][i];
                      else       left  += mixbins[b][i];
                  }
-diff --git a/src/apu/apu_vp.c b/src/apu/apu_vp.c
+diff --git c/src/apu/apu_vp.c w/src/apu/apu_vp.c
 index f45b42b..d03ef75 100644
---- a/src/apu/apu_vp.c
-+++ b/src/apu/apu_vp.c
+--- c/src/apu/apu_vp.c
++++ w/src/apu/apu_vp.c
 @@ -140,10 +140,16 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
      set_notify_status(d, v, notifier, NV1BA0_NOTIFICATION_STATUS_DONE_SUCCESS);
  }
@@ -429,10 +429,10 @@ index f45b42b..d03ef75 100644
  
      uint64_t mask = 1ULL << (v % 64);
      if (lock) {
-diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
+diff --git c/src/apu/apu_xaudio2.c w/src/apu/apu_xaudio2.c
 index cd69e57..e7e3053 100644
---- a/src/apu/apu_xaudio2.c
-+++ b/src/apu/apu_xaudio2.c
+--- c/src/apu/apu_xaudio2.c
++++ w/src/apu/apu_xaudio2.c
 @@ -11,8 +11,8 @@
  #include <string.h>
  #include "apu_xaudio2.h"
@@ -676,13 +676,19 @@ index cd69e57..e7e3053 100644
 +    return (int)state.BuffersQueued;
 +}
 +
-+int xa2_get_buffer_size(void)
-+{
-+    return XA2_BUF_SAMPLES;
-+}
-+
+ int xa2_get_buffer_size(void)
+ {
+     return XA2_BUF_SAMPLES;
+ }
+ 
+-#else /* !_WIN32 -- POSIX stubs (no audio output yet) */
 +#elif defined(__EMSCRIPTEN__) /* -- ring in shared memory, AudioWorklet */
-+
+ 
+-int  xa2_init(void)                                   { return 0; }
+-void xa2_shutdown(void)                               {}
+-int  xa2_is_active(void)                              { return 0; }
+-int  xa2_submit_samples(const int16_t *s, int n)      { (void)s; (void)n; return 0; }
+-int  xa2_get_buffer_size(void)                        { return 0; }
 +/* The page's AudioWorklet (web/ in the game project) reads this ring straight
 + * out of the wasm memory: 48 kHz stereo s16, single producer (the APU frame
 + * thread), single consumer (the worklet). Positions count frames and only
@@ -785,12 +791,11 @@ index cd69e57..e7e3053 100644
 +    return g_web_on ? web_queued(g_web_buf_samples) : 0;
 +}
 +
- int xa2_get_buffer_size(void)
- {
-     return XA2_BUF_SAMPLES;
- }
- 
--#else /* !_WIN32 -- POSIX stubs (no audio output yet) */
++int xa2_get_buffer_size(void)
++{
++    return XA2_BUF_SAMPLES;
++}
++
 +#else /* !_WIN32 -- SDL2 audio queue */
 +
 +int xa2_channels(void) { return 2; }      /* 5.1: Windows (XAudio2) only */
@@ -835,12 +840,7 @@ index cd69e57..e7e3053 100644
 +            SDL_GetCurrentAudioDriver(), have.freq, have.samples);
 +    return 1;
 +}
- 
--int  xa2_init(void)                                   { return 0; }
--void xa2_shutdown(void)                               {}
--int  xa2_is_active(void)                              { return 0; }
--int  xa2_submit_samples(const int16_t *s, int n)      { (void)s; (void)n; return 0; }
--int  xa2_get_buffer_size(void)                        { return 0; }
++
 +void xa2_shutdown(void)
 +{
 +    if (!g_sdl_dev) return;
@@ -913,10 +913,10 @@ index cd69e57..e7e3053 100644
 +}
  
  #endif /* _WIN32 */
-diff --git a/src/apu/apu_xaudio2.h b/src/apu/apu_xaudio2.h
+diff --git c/src/apu/apu_xaudio2.h w/src/apu/apu_xaudio2.h
 index 83e652d..235e61f 100644
---- a/src/apu/apu_xaudio2.h
-+++ b/src/apu/apu_xaudio2.h
+--- c/src/apu/apu_xaudio2.h
++++ w/src/apu/apu_xaudio2.h
 @@ -18,7 +18,16 @@ int xa2_is_active(void);
  /* Submit interleaved stereo 16-bit samples. Returns 1 if accepted. */
  int xa2_submit_samples(const int16_t *samples, int num_samples);
@@ -934,10 +934,10 @@ index 83e652d..235e61f 100644
 +void xa2_take_stats(int *underruns, int *drops, int *min_queued, int *waits, int *refills);
  
  #endif /* APU_XAUDIO2_H */
-diff --git a/src/d3d/CMakeLists.txt b/src/d3d/CMakeLists.txt
+diff --git c/src/d3d/CMakeLists.txt w/src/d3d/CMakeLists.txt
 index bb42c28..973b6c7 100644
---- a/src/d3d/CMakeLists.txt
-+++ b/src/d3d/CMakeLists.txt
+--- c/src/d3d/CMakeLists.txt
++++ w/src/d3d/CMakeLists.txt
 @@ -17,6 +17,12 @@ if(WIN32)
      # Offline smoke test for the pure format layer (no D3D11 device needed).
      add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../tests/d3d8_smoke
@@ -951,10 +951,10 @@ index bb42c28..973b6c7 100644
  else()
      add_library(xbox_d3d8 STATIC
          d3d8_gl.c
-diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+diff --git c/src/input/CMakeLists.txt w/src/input/CMakeLists.txt
 index caef326..6d5d794 100644
---- a/src/input/CMakeLists.txt
-+++ b/src/input/CMakeLists.txt
+--- c/src/input/CMakeLists.txt
++++ w/src/input/CMakeLists.txt
 @@ -8,6 +8,8 @@ target_include_directories(xbox_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
  
  if(WIN32)
@@ -964,10 +964,10 @@ index caef326..6d5d794 100644
  else()
      find_package(SDL2 REQUIRED)
      target_link_libraries(xbox_input PUBLIC platform SDL2::SDL2)
-diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+diff --git c/src/input/xinput_device.c w/src/input/xinput_device.c
 index a91edbe..ae120d6 100644
---- a/src/input/xinput_device.c
-+++ b/src/input/xinput_device.c
+--- c/src/input/xinput_device.c
++++ w/src/input/xinput_device.c
 @@ -13,6 +13,135 @@
  #include "xinput_xbox.h"
  #include <stdlib.h>
@@ -1507,11 +1507,19 @@ index a91edbe..ae120d6 100644
      return ERROR_SUCCESS;
  }
  
-diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
-index a045752..d2df24b 100644
---- a/src/kernel/CMakeLists.txt
-+++ b/src/kernel/CMakeLists.txt
-@@ -21,6 +21,7 @@ set(KERNEL_SOURCES
+diff --git c/src/kernel/CMakeLists.txt w/src/kernel/CMakeLists.txt
+index a045752..6e2afac 100644
+--- c/src/kernel/CMakeLists.txt
++++ w/src/kernel/CMakeLists.txt
+@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.20)
+ 
+ set(KERNEL_SOURCES
+     kernel_path.c
++    kernel_mods.c
+     kernel_pool.c
+     kernel_rtl.c
+     kernel_memory.c
+@@ -21,6 +22,7 @@ set(KERNEL_SOURCES
      kernel_bridge.c
      xbox_memory_layout.c
      guest_vmem.c
@@ -1519,7 +1527,7 @@ index a045752..d2df24b 100644
      icall_feedback.c
      recomp_trace.c
      nv2a_pb_scan.c
-@@ -44,6 +45,9 @@ if(WIN32)
+@@ -44,6 +46,9 @@ if(WIN32)
      # platform is an INTERFACE target on Windows: it contributes the src/
      # include path that "platform/xbox_winnt.h" resolves against.
      target_link_libraries(xbox_kernel PUBLIC platform kernel32 bcrypt)
@@ -1529,11 +1537,30 @@ index a045752..d2df24b 100644
  else()
      # Linux: platform layer (POSIX host primitives) + OpenSSL for crypto.
      find_package(OpenSSL REQUIRED)
-diff --git a/src/kernel/guest_ptr.h b/src/kernel/guest_ptr.h
+diff --git c/src/kernel/README.md w/src/kernel/README.md
+index f0437c9..5142ddc 100644
+--- c/src/kernel/README.md
++++ w/src/kernel/README.md
+@@ -161,6 +161,14 @@ Z:\cache.dat                 → <save_dir>\cache\cache.dat
+ xbox_path_init("Burnout 3 Takedown", "saves");
+ ```
+ 
++`save_dir` defaults to `$XDG_DATA_HOME/xboxrecomp` (POSIX) or
++`%LOCALAPPDATA%\xboxrecomp` (Windows). The title's own saves,
++`\Device\Harddisk0\Partition1\UDATA` and `...\TDATA` (where XAPI maps U: and T:),
++go to `<save_dir>/UDATA` and `<save_dir>/TDATA`. `RECOMP_SAVE_DIR=<dir>` moves
++just those two under `<dir>` (created if missing; absolute, and under Wine a
++DOS path such as `Z:\home\me\run\save`), so a scripted run can start from an
++empty save without touching the rest of the save dir.
++
+ ## Threading
+ 
+ Xbox threads use `PsCreateSystemThreadEx` with NT-style parameters. We create Win32 threads with a wrapper that sets up the register context:
+diff --git c/src/kernel/guest_ptr.h w/src/kernel/guest_ptr.h
 new file mode 100644
 index 0000000..c24d5b4
 --- /dev/null
-+++ b/src/kernel/guest_ptr.h
++++ w/src/kernel/guest_ptr.h
 @@ -0,0 +1,27 @@
 +/* Guest VA -> host pointer, for host code that reads or writes guest memory
 + * (device models, bridges, diagnostics).
@@ -1562,11 +1589,11 @@ index 0000000..c24d5b4
 +uint32_t xbox_HostToGuest(const void *host);
 +
 +#endif
-diff --git a/src/kernel/guest_wasm.c b/src/kernel/guest_wasm.c
+diff --git c/src/kernel/guest_wasm.c w/src/kernel/guest_wasm.c
 new file mode 100644
 index 0000000..45b6a74
 --- /dev/null
-+++ b/src/kernel/guest_wasm.c
++++ w/src/kernel/guest_wasm.c
 @@ -0,0 +1,113 @@
 +/*
 + * Guest address space for the WebAssembly build.
@@ -1681,10 +1708,48 @@ index 0000000..45b6a74
 +    return (void *)(uintptr_t)(guest_base + g_xbox_pagemap[guest_base >> 20]);
 +}
 +#endif
-diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index c65ba43..79cb9fb 100644
---- a/src/kernel/kernel_bridge.c
-+++ b/src/kernel/kernel_bridge.c
+diff --git c/src/kernel/kernel.h w/src/kernel/kernel.h
+index b9a02bc..ee87394 100644
+--- c/src/kernel/kernel.h
++++ w/src/kernel/kernel.h
+@@ -115,6 +115,9 @@ enum {
+ #ifndef STATUS_ACCESS_DENIED
+ #define STATUS_ACCESS_DENIED            ((NTSTATUS)0xC0000022L)
+ #endif
++#ifndef STATUS_OBJECT_NAME_INVALID
++#define STATUS_OBJECT_NAME_INVALID      ((NTSTATUS)0xC0000033L)
++#endif
+ #ifndef STATUS_OBJECT_NAME_NOT_FOUND
+ #define STATUS_OBJECT_NAME_NOT_FOUND    ((NTSTATUS)0xC0000034L)
+ #endif
+@@ -672,9 +675,7 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+     PLARGE_INTEGER ByteOffset);
+ 
+ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle);
+-#ifdef _WIN32
+ void xbox_dir_context_drop(HANDLE FileHandle);
+-#endif
+ 
+ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes);
+ 
+@@ -690,6 +691,13 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+     HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
+     PVOID FsInformation, ULONG Length, XBOX_FS_INFORMATION_CLASS FsInformationClass);
+ 
++/* NtSetInformationFile(FileRenameInformation), with the guest's
++ * FILE_RENAME_INFORMATION already unpacked: its FileName is a guest pointer,
++ * so only the bridge can read it. NewName->RootDirectory is a host HANDLE or
++ * NULL; a bare name with no root renames within the file's own directory. */
++NTSTATUS __stdcall xbox_RenameFileByHandle(
++    HANDLE FileHandle, PXBOX_OBJECT_ATTRIBUTES NewName, BOOLEAN ReplaceIfExists);
++
+ NTSTATUS __stdcall xbox_NtFlushBuffersFile(HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock);
+ 
+ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+diff --git c/src/kernel/kernel_bridge.c w/src/kernel/kernel_bridge.c
+index c65ba43..b8dbb5d 100644
+--- c/src/kernel/kernel_bridge.c
++++ w/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
   */
  
@@ -1751,7 +1816,22 @@ index c65ba43..79cb9fb 100644
  
      /* HAL disk identity strings (ordinals 41/42). The exported symbol is an
       * XBOX_ANSI_STRING whose Buffer must be an Xbox VA the title can deref --
-@@ -744,7 +745,7 @@ static void bridge_MmAllocateSystemMemory(void)
+@@ -682,12 +683,8 @@ static void bridge_NtClose(void)
+     /* Close real handles but skip fake/synthetic ones */
+     if (raw_handle && raw_handle != 0xDEAD0001u && raw_handle != 0xBEEF0010u) {
+         HANDLE h = bridge_take_handle(raw_handle);
+-        if (h && h != INVALID_HANDLE_VALUE) {
+-#ifdef _WIN32
+-            xbox_dir_context_drop(h);
+-#endif
+-            CloseHandle(h);
+-        }
++        if (h && h != INVALID_HANDLE_VALUE)
++            xbox_NtClose(h);   /* settles a pending overwrite; drops a dir context */
+     }
+     g_eax = 0; /* STATUS_SUCCESS */
+ }
+@@ -744,7 +741,7 @@ static void bridge_MmAllocateSystemMemory(void)
      }
      xbox_va = xbox_HeapAlloc(size, 4096);
      if (xbox_va)
@@ -1760,7 +1840,7 @@ index c65ba43..79cb9fb 100644
      else
          fprintf(stderr, "  [KERNEL] MmAllocateSystemMemory: %u bytes REFUSED\n",
                  size);
-@@ -788,7 +789,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
+@@ -788,7 +785,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
           * pool headers and free-list roots are assumed clear, so whatever the
           * backing view happened to contain shows up later as structures that
           * are "allocated" but full of garbage. */
@@ -1769,7 +1849,7 @@ index c65ba43..79cb9fb 100644
  
          if (KERNEL_LOG_ON_HALF()) {
              fprintf(stderr, "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u "
-@@ -1275,7 +1276,7 @@ static void bridge_ExQueryNonVolatileSetting(void)
+@@ -1275,7 +1272,7 @@ static void bridge_ExQueryNonVolatileSetting(void)
      NTSTATUS st = xbox_ExQueryNonVolatileSetting(
          value_index,
          type_va   ? (PULONG)&BRIDGE_MEM32(type_va)   : NULL,
@@ -1778,7 +1858,7 @@ index c65ba43..79cb9fb 100644
          value_length,
          result_va ? (PULONG)&BRIDGE_MEM32(result_va) : NULL);
  
-@@ -1514,6 +1515,31 @@ static HANDLE bridge_resolve_handle(uint32_t token);
+@@ -1514,6 +1511,31 @@ static HANDLE bridge_resolve_handle(uint32_t token);
  static HANDLE ke_guest_event(uint32_t guest_va, int *type);
  
  /* ── KeSetEvent (ordinal 145) ────────────────────────────── */
@@ -1810,7 +1890,7 @@ index c65ba43..79cb9fb 100644
  static void bridge_KeSetEvent(void)
  {
      uint32_t guest_va = STACK_ARG(0);
-@@ -1528,12 +1554,14 @@ static void bridge_KeSetEvent(void)
+@@ -1528,12 +1550,14 @@ static void bridge_KeSetEvent(void)
          int type;
          HANDLE ge = ke_guest_event(guest_va, &type);
          if (ge) {
@@ -1825,7 +1905,7 @@ index c65ba43..79cb9fb 100644
      h = ke_shadow_lookup(guest_va);
      if (!h)
          h = bridge_resolve_handle(guest_va);
-@@ -1545,6 +1573,21 @@ static void bridge_KeSetEvent(void)
+@@ -1545,6 +1569,21 @@ static void bridge_KeSetEvent(void)
          g_eax = 0;
  }
  
@@ -1847,7 +1927,7 @@ index c65ba43..79cb9fb 100644
  /* ── KeWaitForSingleObject (ordinal 159) ─────────────────── */
  static void bridge_KeWaitForSingleObject(void)
  {
-@@ -1560,6 +1603,7 @@ static void bridge_KeWaitForSingleObject(void)
+@@ -1560,6 +1599,7 @@ static void bridge_KeWaitForSingleObject(void)
           * writing 0 there -- so bring the host event in line first. */
          int type;
          HANDLE ge = ke_guest_event(object, &type);
@@ -1855,7 +1935,7 @@ index c65ba43..79cb9fb 100644
          if (ge) {
              if (BRIDGE_MEM32(object + 4) == 0) {
                  ResetEvent(ge);
-@@ -2028,6 +2072,21 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
+@@ -2028,6 +2068,21 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
      BRIDGE_MEM32(dpc_va + 20) = arg1;
      BRIDGE_MEM32(dpc_va + 24) = arg2;
  
@@ -1877,7 +1957,7 @@ index c65ba43..79cb9fb 100644
      g_esp -= 4; BRIDGE_MEM32(g_esp) = arg2;
      g_esp -= 4; BRIDGE_MEM32(g_esp) = arg1;
      g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
-@@ -2251,26 +2310,56 @@ static int kernel_raise_interrupt(uint32_t vector)
+@@ -2251,26 +2306,56 @@ static int kernel_raise_interrupt(uint32_t vector)
  #define NV2A_PCRTC_INTR_VBLANK (1u << 0)
  #define NV2A_VECTOR            3u
  
@@ -1941,7 +2021,7 @@ index c65ba43..79cb9fb 100644
      BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PMC_INTR_0)   |= NV2A_PMC_INTR_PCRTC;
  
      {
-@@ -2284,6 +2373,222 @@ static void kernel_vblank_tick(void)
+@@ -2284,6 +2369,222 @@ static void kernel_vblank_tick(void)
      }
  }
  
@@ -2164,7 +2244,7 @@ index c65ba43..79cb9fb 100644
  /* Run whatever is queued. Called from the timer thread, which has the guest
   * stack and TIB that a deferred routine needs. */
  static void kernel_drain_dpcs(void)
-@@ -2532,15 +2837,37 @@ static void bridge_KeInitializeTimerEx(void)
+@@ -2532,15 +2833,37 @@ static void bridge_KeInitializeTimerEx(void)
  typedef struct {
      uint32_t timer_va;      /* the guest KTIMER, 0 for a free slot */
      uint32_t dpc_va;
@@ -2203,7 +2283,7 @@ index c65ba43..79cb9fb 100644
      int slot = xbox_worker_stack_alloc();
  
      (void)unused;
-@@ -2566,14 +2893,34 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2566,14 +2889,34 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          g_fs_base = tib;
      }
  
@@ -2241,7 +2321,7 @@ index c65ba43..79cb9fb 100644
  
          for (i = 0; i < XBOX_MAX_TIMERS; i++) {
              uint32_t dpc, fired_va;
-@@ -2585,20 +2932,53 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2585,20 +2928,53 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
              }
              fired_va = g_timers[i].timer_va;
              dpc = g_timers[i].dpc_va;
@@ -2299,7 +2379,7 @@ index c65ba43..79cb9fb 100644
                  if (ev) {
                      SetEvent(ev);
                      BRIDGE_MEM32(fired_va + 4) = 1;   /* SignalState */
-@@ -2612,7 +2992,9 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2612,7 +2988,9 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
  static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
                               long period_ms, uint32_t dpc_va)
  {
@@ -2310,7 +2390,7 @@ index c65ba43..79cb9fb 100644
      int i, free_slot = -1;
      uint32_t was_set = 0;
  
-@@ -2630,11 +3012,35 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
+@@ -2630,11 +3008,35 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
      if (free_slot >= 0) {
          g_timers[free_slot].timer_va  = timer_va;
          g_timers[free_slot].dpc_va    = dpc_va;
@@ -2347,7 +2427,7 @@ index c65ba43..79cb9fb 100644
      /* A freshly set timer starts unsignaled, like the real KeSetTimer. */
      {
          HANDLE ev = ke_shadow_lookup(timer_va);
-@@ -2966,6 +3372,7 @@ static NTSTATUS bridge_create_file_impl(
+@@ -2966,6 +3368,7 @@ static NTSTATUS bridge_create_file_impl(
          bridge_write_handle(handle_va, h);
          bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
      } else {
@@ -2355,7 +2435,42 @@ index c65ba43..79cb9fb 100644
          bridge_write_iostatus(iostatus_va, st, 0);
      }
      return st;
-@@ -3159,6 +3566,16 @@ static void bridge_NtOpenFile(void)
+@@ -3113,14 +3516,31 @@ static void bridge_NtCreateFile(void)
+     {
+         extern uint32_t xbox_LastFileError(void);
+         uint32_t _e = g_eax ? xbox_LastFileError() : 0u;
++        /* The guest's own path, read from its OBJECT_ATTRIBUTES. The POSIX
++         * path backend prints no [PATH] line, so without this a failed open
++         * on macOS said that something was missing but not what. */
++        char gpath[160] = "?";
++        if (obj_attrs) {
++            uint32_t str = BRIDGE_MEM32(obj_attrs + 4);
++            if (str) {
++                uint32_t len = BRIDGE_MEM16(str), buf = BRIDGE_MEM32(str + 4), k;
++                if (buf) {
++                    if (len >= sizeof gpath) len = sizeof gpath - 1;
++                    for (k = 0; k < len; k++)
++                        gpath[k] = (char)BRIDGE_MEM8(buf + k);
++                    gpath[len] = 0;
++                }
++            }
++        }
+         if (g_eax)
+-            fprintf(stderr, "  [FILE] -> 0x%08X FAILED (win32 err=%u%s)\n",
+-                    g_eax, _e,
++            fprintf(stderr, "  [FILE] %s (disp %u) -> 0x%08X FAILED (win32 err=%u%s)\n",
++                    gpath, (unsigned)disposition, g_eax, _e,
+                     _e == 32u ? " ERROR_SHARING_VIOLATION"
+                   : _e ==  2u ? " ERROR_FILE_NOT_FOUND"
+                   : _e ==  3u ? " ERROR_PATH_NOT_FOUND" : "");
+         else
+-            fprintf(stderr, "  [FILE] -> 0x%08X\n", g_eax);
++            fprintf(stderr, "  [FILE] %s (disp %u) -> 0x%08X\n",
++                    gpath, (unsigned)disposition, g_eax);
+     }
+     fflush(stderr);
+ }
+@@ -3159,6 +3579,16 @@ static void bridge_NtOpenFile(void)
   */
  recomp_func_t recomp_lookup_kernel(uint32_t xbox_va);
  
@@ -2372,7 +2487,7 @@ index c65ba43..79cb9fb 100644
  static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
                              uint32_t iostatus)
  {
-@@ -3175,7 +3592,11 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
+@@ -3175,7 +3605,11 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
          g_esp -= 4; BRIDGE_MEM32(g_esp) = iostatus;
          g_esp -= 4; BRIDGE_MEM32(g_esp) = apc_context;
          g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;   /* dummy return address */
@@ -2385,7 +2500,7 @@ index c65ba43..79cb9fb 100644
          g_esp += 12;
      } else {
          uint32_t ord = 0;
-@@ -3399,6 +3820,20 @@ static int bridge_async_io_enabled(void)
+@@ -3399,6 +3833,20 @@ static int bridge_async_io_enabled(void)
      return on;
  }
  
@@ -2406,7 +2521,7 @@ index c65ba43..79cb9fb 100644
  /* ── NtReadFile (ordinal 219, 8 args = 32 bytes) ──────── */
  static void bridge_NtReadFile(void)
  {
-@@ -3436,7 +3871,9 @@ static void bridge_NtReadFile(void)
+@@ -3436,7 +3884,9 @@ static void bridge_NtReadFile(void)
           * whatever precedes the file it actually wants, and a read that stops
           * early looks identical to one that never started -- until you can
           * see where each one landed. */
@@ -2417,7 +2532,61 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [READ] from=0x%08X ev=%08X apc=%08X @%lld want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
                      g_xbox_kernel_caller, STACK_ARG(1), STACK_ARG(2),
                      (long long)off.QuadPart, length, got,
-@@ -4155,8 +4592,31 @@ static void bridge_KeQueryBasePriorityThread(void)
+@@ -3542,6 +3992,53 @@ static void bridge_NtSetInformationFile(void)
+         g_eax = 0xC0000005u;                 /* STATUS_ACCESS_VIOLATION */
+         return;
+     }
++
++    /* FileRenameInformation (10) carries a pointer, so it is unpacked here,
++     * where guest addresses mean something. Guest layout, 16 bytes:
++     *     +0  BOOLEAN       ReplaceIfExists
++     *     +4  HANDLE        RootDirectory
++     *     +8  OBJECT_STRING FileName { u16 Length, u16 Max, char *Buffer }
++     * A title that writes a z:\ cache file as .tmp and renames it to its
++     * final name never found the final file (0xC0000034) without this. */
++    if (infoclass == 10u) {
++        XBOX_OBJECT_ATTRIBUTES oa;
++        XBOX_ANSI_STRING name;
++        static RECOMP_TLS char path[1024];
++        uint32_t root, buf;
++        uint16_t len;
++
++        if (length < 16u) {
++            g_eax = 0xC0000004u;             /* STATUS_INFO_LENGTH_MISMATCH */
++            bridge_write_iostatus(ios_va, (NTSTATUS)g_eax, 0);
++            return;
++        }
++        root = BRIDGE_MEM32(info_va + 4);
++        len  = BRIDGE_MEM16(info_va + 8);
++        buf  = BRIDGE_MEM32(info_va + 12);
++        if (!len || len >= sizeof path || !bridge_va_mapped(buf, len)) {
++            g_eax = (uint32_t)STATUS_OBJECT_NAME_INVALID;
++            bridge_write_iostatus(ios_va, (NTSTATUS)g_eax, 0);
++            return;
++        }
++        memcpy(path, XBOX_TO_NATIVE(buf), len);
++        path[len] = '\0';
++        name.Buffer = path;
++        name.Length = len;
++        name.MaximumLength = (USHORT)(len + 1);
++        /* -3 is the XDK DOS-device namespace, as in bridge_build_oa. */
++        oa.RootDirectory = root && root != 0xFFFFFFFDu
++                         ? bridge_resolve_handle(root) : NULL;
++        oa.ObjectName = &name;
++        oa.Attributes = 0;
++        g_eax = (uint32_t)xbox_RenameFileByHandle(handle, &oa,
++                    (BOOLEAN)(BRIDGE_MEM8(info_va) != 0));
++        if (g_eax)
++            fprintf(stderr, "  [FILE] rename to %s -> 0x%08X FAILED\n",
++                    path, g_eax);
++        bridge_write_iostatus(ios_va, (NTSTATUS)g_eax, 0);
++        return;
++    }
++
+     g_eax = (uint32_t)xbox_NtSetInformationFile(handle, &ios,
+                 XBOX_TO_NATIVE(info_va), length,
+                 (XBOX_FILE_INFORMATION_CLASS)infoclass);
+@@ -4155,8 +4652,31 @@ static void bridge_KeQueryBasePriorityThread(void)
          XBOX_TO_NATIVE(STACK_ARG(0)));
  }
  
@@ -2449,7 +2618,7 @@ index c65ba43..79cb9fb 100644
      g_eax = (uint32_t)xbox_KeSetBasePriorityThread(
          XBOX_TO_NATIVE(STACK_ARG(0)), (LONG)STACK_ARG(1));
  }
-@@ -4472,15 +4932,49 @@ static void bridge_KeWaitForMultipleObjects(void)
+@@ -4472,15 +4992,49 @@ static void bridge_KeWaitForMultipleObjects(void)
      }
      if (count > BRIDGE_MAXIMUM_WAIT_OBJECTS)
          count = BRIDGE_MAXIMUM_WAIT_OBJECTS;
@@ -2502,7 +2671,7 @@ index c65ba43..79cb9fb 100644
  }
  
  #undef BRIDGE_MAXIMUM_WAIT_OBJECTS
-@@ -6792,7 +7286,7 @@ static void bridge_IoAllocateIrp(void)
+@@ -6792,7 +7346,7 @@ static void bridge_IoAllocateIrp(void)
      (void)charge_quota;
      va = xbox_HeapAlloc(total, 16);
      if (va)
@@ -2511,7 +2680,7 @@ index c65ba43..79cb9fb 100644
      else
          fprintf(stderr, "  [KERNEL] IoAllocateIrp: %u bytes REFUSED\n", total);
      g_eax = va;
-@@ -7349,8 +7843,7 @@ static void bridge_KeSetPriorityProcess(void)
+@@ -7349,8 +7903,7 @@ static void bridge_KeSetPriorityProcess(void)
  /* --- KeSetPriorityThread (ordinal 148, 2 args = 8 bytes) --- */
  static void bridge_KeSetPriorityThread(void)
  {
@@ -2521,7 +2690,7 @@ index c65ba43..79cb9fb 100644
      g_eax = 0;
  }
  
-@@ -7424,7 +7917,7 @@ static void bridge_MmDbgAllocateMemory(void)
+@@ -7424,7 +7977,7 @@ static void bridge_MmDbgAllocateMemory(void)
      }
      va = xbox_HeapAlloc(size, 16);
      if (va)
@@ -2530,7 +2699,7 @@ index c65ba43..79cb9fb 100644
      g_eax = va;
  }
  
-@@ -9371,14 +9864,218 @@ static int guest_cpu_enabled(void)
+@@ -9371,17 +9924,221 @@ static int guest_cpu_enabled(void)
      return g_guest_cpu_on;
  }
  
@@ -2628,11 +2797,12 @@ index c65ba43..79cb9fb 100644
  {
      t_guest_thread = 1;
      if (guest_cpu_enabled() && !t_guest_held) {
+-        EnterCriticalSection(&g_guest_cpu);
 +        guest_cpu_acquire(prio_index(t_guest_prio));
-+        t_guest_held = 1;
-+    }
-+}
-+
+         t_guest_held = 1;
+     }
+ }
+ 
 +/* Loop-head preemption (RECOMP_LOOP_YIELD in the generated code): every
 + * RECOMP_LOOP_QUANTUM loop iterations a guest thread holding the guest CPU
 + * lets it go and yields, so a thread spinning on a flag another guest thread
@@ -2710,7 +2880,7 @@ index c65ba43..79cb9fb 100644
 +    }
 +    if (on && guest_cpu_enabled()) {
 +        InterlockedIncrement(&g_prio_waiting[33]);
-         EnterCriticalSection(&g_guest_cpu);
++        EnterCriticalSection(&g_guest_cpu);
 +        InterlockedDecrement(&g_prio_waiting[33]);
 +    }
 +}
@@ -2735,7 +2905,7 @@ index c65ba43..79cb9fb 100644
 +    }
 +    if (on && guest_cpu_enabled() && t_guest_thread && !t_guest_held) {
 +        guest_cpu_acquire(prio_index(t_guest_prio));
-         t_guest_held = 1;
++        t_guest_held = 1;
 +        return 1;
 +    }
 +    return 0;
@@ -2746,10 +2916,13 @@ index c65ba43..79cb9fb 100644
 +    if (took && t_guest_held) {
 +        t_guest_held = 0;
 +        LeaveCriticalSection(&g_guest_cpu);
-     }
- }
- 
-@@ -9391,11 +10088,160 @@ void guest_cpu_part(void)
++    }
++}
++
+ void guest_cpu_part(void)
+ {
+     if (t_guest_held) {
+@@ -9391,11 +10148,160 @@ void guest_cpu_part(void)
      t_guest_thread = 0;
  }
  
@@ -2911,7 +3084,7 @@ index c65ba43..79cb9fb 100644
      if (held) {                        /* let other guest threads run meanwhile */
          t_guest_held = 0;
          LeaveCriticalSection(&g_guest_cpu);
-@@ -9403,11 +10249,16 @@ static void kernel_thunk_dispatch(void)
+@@ -9403,11 +10309,16 @@ static void kernel_thunk_dispatch(void)
      t_dispatch_depth++;
      kernel_thunk_dispatch_body();
      t_dispatch_depth--;
@@ -2929,7 +3102,7 @@ index c65ba43..79cb9fb 100644
          t_guest_held = 1;
      }
      (void)held;
-@@ -9447,9 +10298,9 @@ static void kernel_thunk_dispatch_body(void)
+@@ -9447,9 +10358,9 @@ static void kernel_thunk_dispatch_body(void)
  
      {
          static DWORD last_summary_tick = 0;
@@ -2941,7 +3114,7 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [KERNEL] summary: %lld total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
                      g_kernel_call_count, ordinal, slot, g_esp);
              /* And which ones, ranked. "Latest" names whatever the sample
-@@ -9671,7 +10522,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9671,7 +10582,7 @@ void xbox_kernel_bridge_init(void)
      /* The thunk table lives in .rdata which is marked PAGE_READONLY.
       * Temporarily make it writable so we can patch the ordinals. */
      VirtualProtect(
@@ -2950,7 +3123,7 @@ index c65ba43..79cb9fb 100644
          g_thunk_table_count * 4,
          PAGE_READWRITE,
          &old_protect
-@@ -9749,7 +10600,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9749,7 +10660,7 @@ void xbox_kernel_bridge_init(void)
          DWORD scan_protect;
          uint32_t low = g_thunk_table_base - LOOKBEHIND * 4;
  
@@ -2959,7 +3132,7 @@ index c65ba43..79cb9fb 100644
                         LOOKBEHIND * 4, PAGE_READWRITE, &scan_protect);
  
          for (i = 1; i <= LOOKBEHIND; i++) {
-@@ -9778,13 +10629,13 @@ void xbox_kernel_bridge_init(void)
+@@ -9778,13 +10689,13 @@ void xbox_kernel_bridge_init(void)
                      va, g_slot_ordinals[slot], slot);
          }
  
@@ -2975,11 +3148,100 @@ index c65ba43..79cb9fb 100644
          g_thunk_table_count * 4,
          old_protect,
          &old_protect
-diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index 42135e0..73cfde7 100644
---- a/src/kernel/kernel_file.c
-+++ b/src/kernel/kernel_file.c
-@@ -135,7 +135,7 @@ static BOOL translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
+diff --git c/src/kernel/kernel_file.c w/src/kernel/kernel_file.c
+index 42135e0..46359b4 100644
+--- c/src/kernel/kernel_file.c
++++ w/src/kernel/kernel_file.c
+@@ -18,6 +18,7 @@
+ #include "kernel.h"
+ #include <string.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ 
+ #if !defined(_WIN32)
+ #include <fcntl.h>
+@@ -114,6 +115,80 @@ static DWORD xbox_share_to_win32(ULONG Share)
+     return result;
+ }
+ 
++/* FATX overwrite semantics (Win32 side; the POSIX backend below has the
++ * same rule and the long story, at s_overwrite_pending).
++ *
++ * An overwrite open (FILE_SUPERSEDE, FILE_OVERWRITE, FILE_OVERWRITE_IF) of an
++ * existing file sets its size to 0 on FATX, but FATX keeps no valid-data
++ * length, so a later SetEndOfFile that grows the file brings back the bytes
++ * already on disk. A title's z: texture cache can depend on it: it writes
++ * x.tmp, reopens it with CREATE_ALWAYS, only sets the end of file to the true
++ * size, and renames it to x.dat. CREATE_ALWAYS / TRUNCATE_EXISTING on NTFS (and
++ * Wine's ftruncate) zero-fill on the regrow, so every cache file came out as
++ * zeros of the right length.
++ *
++ * So an overwrite of an existing non-empty file opens it with OPEN_EXISTING
++ * and marks the handle pending. If the first thing done with it is setting
++ * the end of file, that is a plain SetEndOfFile to the new size, which keeps
++ * the bytes below it. Anything else (read, write, size query, allocation,
++ * close) first truncates to 0, the normal overwrite. A position query does
++ * not settle: XAPI SetEndOfFile makes one before it sets the end of file. */
++#define FATX_PENDING_MAX 64
++static HANDLE s_overwrite_pending[FATX_PENDING_MAX];
++static SRWLOCK s_overwrite_lock = SRWLOCK_INIT;
++
++static int disposition_overwrites(ULONG disposition)
++{
++    return disposition == XBOX_FILE_SUPERSEDE
++        || disposition == XBOX_FILE_OVERWRITE
++        || disposition == XBOX_FILE_OVERWRITE_IF;
++}
++
++/* Mark h pending. Returns 0 if the table is full. */
++static int overwrite_mark(HANDLE h)
++{
++    int i, ok = 0;
++    AcquireSRWLockExclusive(&s_overwrite_lock);
++    for (i = 0; i < FATX_PENDING_MAX; i++)
++        if (!s_overwrite_pending[i]) { s_overwrite_pending[i] = h; ok = 1; break; }
++    ReleaseSRWLockExclusive(&s_overwrite_lock);
++    return ok;
++}
++
++/* Take the pending mark without truncating. Returns 1 if h was pending. */
++static int overwrite_take(HANDLE h)
++{
++    int i, was = 0;
++    if (!h || h == INVALID_HANDLE_VALUE)
++        return 0;
++    AcquireSRWLockExclusive(&s_overwrite_lock);
++    for (i = 0; i < FATX_PENDING_MAX; i++)
++        if (s_overwrite_pending[i] == h) { s_overwrite_pending[i] = NULL; was = 1; break; }
++    ReleaseSRWLockExclusive(&s_overwrite_lock);
++    return was;
++}
++
++/* Truncate to 0, keeping the file pointer where it was. */
++static void truncate_to_zero(HANDLE h)
++{
++    LARGE_INTEGER cur, zero;
++    zero.QuadPart = 0;
++    if (!SetFilePointerEx(h, zero, &cur, FILE_CURRENT))
++        cur.QuadPart = 0;
++    SetFilePointerEx(h, zero, NULL, FILE_BEGIN);
++    if (!SetEndOfFile(h))
++        xbox_log(XBOX_LOG_WARN, XBOX_LOG_FILE,
++                 "overwrite: truncate failed err=%u", GetLastError());
++    SetFilePointerEx(h, cur, NULL, FILE_BEGIN);
++}
++
++/* Finish a pending overwrite: truncate to 0. */
++static void overwrite_settle(HANDLE h)
++{
++    if (overwrite_take(h))
++        truncate_to_zero(h);
++}
++
+ /* Translate an Xbox OBJECT_ATTRIBUTES path to a Win32 wide path */
+ static BOOL translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
+                                WCHAR* win_path, DWORD buf_size)
+@@ -135,7 +210,7 @@ static BOOL translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
      return xbox_translate_path(xbox_path, win_path, buf_size);
  }
  
@@ -2988,16 +3250,284 @@ index 42135e0..73cfde7 100644
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
      PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess,
-@@ -805,7 +805,7 @@ static NTSTATUS errno_to_status(int e)
+@@ -189,9 +264,37 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+             flags_and_attrs |= FILE_FLAG_NO_BUFFERING;
+         if (FileAttributes & XBOX_FILE_ATTRIBUTE_READONLY)
+             flags_and_attrs |= FILE_ATTRIBUTE_READONLY;
+-        h = CreateFileW(win_path, xbox_access_to_win32(DesiredAccess),
+-            xbox_share_to_win32(ShareAccess), NULL,
+-            xbox_disposition_to_win32(CreateDisposition), flags_and_attrs, NULL);
++        DWORD access = xbox_access_to_win32(DesiredAccess);
++        WIN32_FILE_ATTRIBUTE_DATA fad;
++        /* An overwrite of an existing non-empty file is deferred (see
++         * s_overwrite_pending). It needs write access to settle later. */
++        int defer = disposition_overwrites(CreateDisposition)
++                 && (access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA))
++                 && GetFileAttributesExW(win_path, GetFileExInfoStandard, &fad)
++                 && !(fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
++                 && (fad.nFileSizeHigh || fad.nFileSizeLow);
++        h = INVALID_HANDLE_VALUE;
++        if (defer) {
++            h = CreateFileW(win_path, access, xbox_share_to_win32(ShareAccess),
++                NULL, OPEN_EXISTING, flags_and_attrs, NULL);
++            if (h != INVALID_HANDLE_VALUE)
++                overwrite_take(h);          /* a stale mark; see below */
++            if (h != INVALID_HANDLE_VALUE && !overwrite_mark(h))
++                truncate_to_zero(h);        /* no slot to defer in */
++            else if (h != INVALID_HANDLE_VALUE)
++                XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile: overwrite of %S deferred", win_path);
++        }
++        if (h == INVALID_HANDLE_VALUE) {    /* not deferred, or it vanished */
++            h = CreateFileW(win_path, access,
++                xbox_share_to_win32(ShareAccess), NULL,
++                xbox_disposition_to_win32(CreateDisposition), flags_and_attrs, NULL);
++            /* A HANDLE value is reused once closed, and a pending handle
++             * closed by DuplicateHandle(DUPLICATE_CLOSE_SOURCE) never went
++             * through xbox_NtClose, so its mark may still be in the table.
++             * Clear it, or this unrelated file is truncated on first use. */
++            if (h != INVALID_HANDLE_VALUE)
++                overwrite_take(h);
++        }
+     }
+ 
+     if (h == INVALID_HANDLE_VALUE) {
+@@ -242,6 +345,7 @@ NTSTATUS __stdcall xbox_NtReadFile(
+     if (!IoStatusBlock)
+         return STATUS_INVALID_PARAMETER;
+ 
++    overwrite_settle(FileHandle);
+     if (ByteOffset && ByteOffset->QuadPart >= 0) {
+         memset(&ov, 0, sizeof(ov));
+         ov.Offset = ByteOffset->LowPart;
+@@ -282,6 +386,7 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+     if (!IoStatusBlock)
+         return STATUS_INVALID_PARAMETER;
+ 
++    overwrite_settle(FileHandle);
+     if (ByteOffset && ByteOffset->QuadPart >= 0) {
+         memset(&ov, 0, sizeof(ov));
+         ov.Offset = ByteOffset->LowPart;
+@@ -309,6 +414,7 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ {
+     XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
+     if (Handle && Handle != INVALID_HANDLE_VALUE) {
++        overwrite_settle(Handle);
+         xbox_dir_context_drop(Handle);
+         CloseHandle(Handle);
+         return STATUS_SUCCESS;
+@@ -335,6 +441,11 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+     if (!IoStatusBlock || !FileInformation)
+         return STATUS_INVALID_PARAMETER;
+ 
++    /* Not for a position query: XAPI SetEndOfFile makes one before it
++     * sets the end of file, and a pending overwrite must survive it. */
++    if (FileInformationClass != XboxFilePositionInformation)
++        overwrite_settle(FileHandle);
++
+     switch (FileInformationClass) {
+         case XboxFileBasicInformation: {
+             PXBOX_FILE_BASIC_INFORMATION info = (PXBOX_FILE_BASIC_INFORMATION)FileInformation;
+@@ -428,6 +539,9 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+         case XboxFileEndOfFileInformation: {
+             PXBOX_FILE_END_OF_FILE_INFORMATION info = (PXBOX_FILE_END_OF_FILE_INFORMATION)FileInformation;
+             LARGE_INTEGER cur, zero = {0};
++            /* A pending overwrite ends here: SetEndOfFile to the new size
++             * keeps the old bytes below it (see s_overwrite_pending). */
++            overwrite_take(FileHandle);
+             SetFilePointerEx(FileHandle, zero, &cur, FILE_CURRENT);
+             SetFilePointerEx(FileHandle, info->EndOfFile, NULL, FILE_BEGIN);
+             if (!SetEndOfFile(FileHandle)) {
+@@ -455,6 +569,7 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+             PXBOX_FILE_END_OF_FILE_INFORMATION info =
+                 (PXBOX_FILE_END_OF_FILE_INFORMATION)FileInformation;
+             FILE_ALLOCATION_INFO fai;
++            overwrite_settle(FileHandle);
+             fai.AllocationSize = info->EndOfFile;
+             if (!SetFileInformationByHandle(FileHandle, FileAllocationInfo,
+                                             &fai, sizeof(fai))) {
+@@ -743,6 +858,66 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     return STATUS_SUCCESS;
+ }
+ 
++
++/* Rename an open file. See the POSIX version for the cases; this one asks
++ * the handle to do it (FileRenameInfo), which needs DELETE access, and falls
++ * back to MoveFileExW on the path the handle names. Tested under Proton
++ * only. */
++NTSTATUS __stdcall xbox_RenameFileByHandle(
++    HANDLE FileHandle, PXBOX_OBJECT_ATTRIBUTES NewName, BOOLEAN ReplaceIfExists)
++{
++    WCHAR src[MAX_PATH], dst[MAX_PATH];
++    const char *name = get_xbox_path(NewName);
++    DWORD n;
++
++    if (!name || !*name)
++        return STATUS_INVALID_PARAMETER;
++    n = GetFinalPathNameByHandleW(FileHandle, src, MAX_PATH,
++                                  FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
++    if (!n || n >= MAX_PATH)
++        return STATUS_INVALID_HANDLE;
++
++    if (!NewName->RootDirectory && !strchr(name, '\\') && !strchr(name, ':')) {
++        WCHAR *slash = wcsrchr(src, L'\\');
++        size_t dir = slash ? (size_t)(slash - src) + 1 : 0;
++        memcpy(dst, src, dir * sizeof(WCHAR));
++        if (!MultiByteToWideChar(CP_ACP, 0, name, -1, dst + dir,
++                                 (int)(MAX_PATH - dir)))
++            return STATUS_OBJECT_NAME_INVALID;
++    } else if (!translate_obj_path(NewName, dst, MAX_PATH)) {
++        return STATUS_OBJECT_PATH_NOT_FOUND;
++    }
++
++    {
++        size_t len = wcslen(dst);
++        size_t bytes = sizeof(FILE_RENAME_INFO) + len * sizeof(WCHAR);
++        FILE_RENAME_INFO *fri = (FILE_RENAME_INFO *)calloc(1, bytes);
++        BOOL ok = FALSE;
++        if (fri) {
++            fri->ReplaceIfExists = ReplaceIfExists ? TRUE : FALSE;
++            fri->RootDirectory = NULL;
++            fri->FileNameLength = (DWORD)(len * sizeof(WCHAR));
++            memcpy(fri->FileName, dst, (len + 1) * sizeof(WCHAR));
++            ok = SetFileInformationByHandle(FileHandle, FileRenameInfo, fri,
++                                            (DWORD)bytes);
++            free(fri);
++        }
++        if (!ok)
++            ok = MoveFileExW(src, dst,
++                             ReplaceIfExists ? MOVEFILE_REPLACE_EXISTING : 0);
++        if (!ok) {
++            DWORD e = GetLastError();
++            return e == ERROR_ALREADY_EXISTS || e == ERROR_FILE_EXISTS
++                 ? STATUS_OBJECT_NAME_COLLISION
++                 : e == ERROR_ACCESS_DENIED ? STATUS_ACCESS_DENIED
++                 : STATUS_UNSUCCESSFUL;
++        }
++    }
++    fprintf(stderr, "  [FILE] rename %S -> %S\n", src, dst);
++    fflush(stderr);
++    return STATUS_SUCCESS;
++}
++
+ /* ======================================================================== */
+ #else /* !_WIN32 */
+ /* ====================  POSIX backend  =================================== */
+@@ -773,6 +948,59 @@ static int posix_open_flags(ACCESS_MASK access, ULONG disposition)
+     return rw | extra;
+ }
+ 
++/* FATX overwrite semantics.
++ *
++ * An overwrite open (FILE_SUPERSEDE, FILE_OVERWRITE, FILE_OVERWRITE_IF) of an
++ * existing file sets its size to 0 on FATX, but FATX keeps no valid-data
++ * length: growing the file again with SetEndOfFile, without writing, brings
++ * back the bytes already on disk. A title can rely on this when it builds a
++ * utility-drive texture cache:
++ *
++ *   CreateFile(x.tmp, CREATE_ALWAYS, NO_BUFFERING|OVERLAPPED)
++ *   SetEndOfFile(size rounded up to 512); WriteFile(all of it); CloseHandle
++ *   CreateFile(x.tmp, CREATE_ALWAYS)      <- the second overwrite
++ *   SetEndOfFile(true size); CloseHandle; rename x.tmp -> x.dat
++ *
++ * The second open only trims the sector padding. With O_TRUNC the host
++ * filesystem zero-fills on the regrow, so every cache file came out as zeros
++ * of the right length, and the game later loaded zero textures from them.
++ *
++ * So an overwrite of an existing non-empty file is opened without O_TRUNC
++ * and marked pending. If the first thing done with the handle is setting
++ * the end of file, that is a plain ftruncate to the new size, which keeps
++ * the old bytes below it as FATX does. Anything else (read, write, size
++ * query, allocation, close) first truncates to 0, which is the normal
++ * overwrite. The table is indexed by host fd. */
++#define FATX_PENDING_MAX 4096
++static volatile unsigned char s_overwrite_pending[FATX_PENDING_MAX];
++
++static int disposition_overwrites(ULONG disposition)
++{
++    return disposition == XBOX_FILE_SUPERSEDE
++        || disposition == XBOX_FILE_OVERWRITE
++        || disposition == XBOX_FILE_OVERWRITE_IF;
++}
++
++/* Finish a pending overwrite: truncate to 0. */
++static void overwrite_settle(int fd)
++{
++    if (fd >= 0 && fd < FATX_PENDING_MAX && s_overwrite_pending[fd]) {
++        s_overwrite_pending[fd] = 0;
++        if (ftruncate(fd, 0) != 0) { /* nothing more to do */ }
++    }
++}
++
++/* Take the pending mark without truncating (end-of-file set). Returns 1 if
++ * the handle was pending. */
++static int overwrite_take(int fd)
++{
++    if (fd >= 0 && fd < FATX_PENDING_MAX && s_overwrite_pending[fd]) {
++        s_overwrite_pending[fd] = 0;
++        return 1;
++    }
++    return 0;
++}
++
+ static void unix_to_filetime(time_t sec, long nsec, LARGE_INTEGER* out)
+ {
+     /* 100-ns ticks since 1601-01-01 */
+@@ -805,7 +1033,45 @@ static NTSTATUS errno_to_status(int e)
      }
  }
  
 -NTSTATUS __stdcall xbox_NtCreateFile(
++/* Translate an Xbox OBJECT_ATTRIBUTES path to a host path.
++ *
++ * A name relative to a RootDirectory handle is joined to that handle's host
++ * path, as the Win32 backend does (translate_obj_path). XAPI opens a save
++ * game's files that way: XCreateSaveGame / XDeleteSaveGame open the save
++ * directory and then "Data.ssx" relative to it. Through the path table alone
++ * the bare name matched no rule and the open failed with
++ * STATUS_OBJECT_PATH_NOT_FOUND -- SSX 3 reported "Unable to save" when it
++ * overwrote an existing save. */
++static int posix_obj_path(PXBOX_OBJECT_ATTRIBUTES oa, char* host_path, size_t n)
++{
++    const char* xbox_path = get_xbox_path(oa);
++
++    if (!xbox_path)
++        return 0;
++    if (oa->RootDirectory && xbox_path[0] != '\\'
++            && !(xbox_path[0] && xbox_path[1] == ':')) {
++        const char* base = w32_handle_path(oa->RootDirectory);
++        size_t dir;
++        char* p;
++
++        if (!base)
++            return 0;
++        dir = strlen(base);
++        while (dir > 1 && base[dir - 1] == '/')
++            dir--;
++        if (dir + 1 + strlen(xbox_path) >= n)
++            return 0;
++        memcpy(host_path, base, dir);
++        host_path[dir] = '/';
++        strcpy(host_path + dir + 1, xbox_path);
++        for (p = host_path + dir + 1; *p; p++)
++            if (*p == '\\') *p = '/';
++        return 1;
++    }
++    return xbox_translate_path(xbox_path, host_path, (DWORD)n) ? 1 : 0;
++}
++
 +static NTSTATUS __stdcall nt_create_file(
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
      PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess,
-@@ -824,7 +824,12 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -817,24 +1083,41 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+     if (!FileHandle || !ObjectAttributes)
+         return STATUS_INVALID_PARAMETER;
+ 
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH)) {
++    if (!posix_obj_path(ObjectAttributes, host_path, MAX_PATH)) {
+         xbox_log(XBOX_LOG_ERROR, XBOX_LOG_FILE, "NtCreateFile: path translation failed");
+         return STATUS_OBJECT_PATH_NOT_FOUND;
      }
  
      int fd;
@@ -3011,7 +3541,23 @@ index 42135e0..73cfde7 100644
          if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
              mkdir(host_path, 0755);   /* EEXIST is fine */
          fd = open(host_path, O_RDONLY | O_DIRECTORY);
-@@ -835,6 +840,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+     } else {
+-        fd = open(host_path, posix_open_flags(DesiredAccess, CreateDisposition), 0644);
++        int flags = posix_open_flags(DesiredAccess, CreateDisposition);
++        struct stat st;
++        int defer = disposition_overwrites(CreateDisposition)
++                 && stat(host_path, &st) == 0 && S_ISREG(st.st_mode)
++                 && st.st_size > 0;
++        if (defer)
++            flags &= ~O_TRUNC;
++        fd = open(host_path, flags, 0644);
++        if (fd >= 0 && fd < FATX_PENDING_MAX)
++            s_overwrite_pending[fd] = (unsigned char)defer;
++        else if (fd >= 0 && defer && ftruncate(fd, 0) != 0) {
++            /* no slot to defer in: truncate now */
++        }
+     }
+ 
      if (fd < 0) {
          int e = errno;
          XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile FAILED: %s (errno=%d)", host_path, e);
@@ -3019,7 +3565,203 @@ index 42135e0..73cfde7 100644
          if (IoStatusBlock) {
              IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
              IoStatusBlock->Information = 0;
-@@ -1340,3 +1346,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
+@@ -866,6 +1149,7 @@ NTSTATUS __stdcall xbox_NtReadFile(
+         return STATUS_INVALID_HANDLE;
+     }
+ 
++    overwrite_settle(fd);
+     if (ByteOffset && ByteOffset->QuadPart >= 0)
+         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
+ 
+@@ -902,6 +1186,7 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+         return STATUS_INVALID_HANDLE;
+     }
+ 
++    overwrite_settle(fd);
+     if (ByteOffset && ByteOffset->QuadPart >= 0)
+         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
+ 
+@@ -923,6 +1208,10 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ {
+     XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
+     if (Handle && Handle != INVALID_HANDLE_VALUE) {
++        overwrite_settle(w32_handle_fd(Handle));
++        /* Before CloseHandle: once the object is freed its address can come
++         * back as the next handle, which must not inherit this search. */
++        xbox_dir_context_drop(Handle);
+         CloseHandle(Handle);
+         return STATUS_SUCCESS;
+     }
+@@ -932,8 +1221,7 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
+ {
+     char host_path[MAX_PATH];
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
++    if (!posix_obj_path(ObjectAttributes, host_path, MAX_PATH))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     XBOX_TRACE(XBOX_LOG_FILE, "NtDeleteFile: %s", host_path);
+     if (unlink(host_path) == 0) return STATUS_SUCCESS;
+@@ -955,6 +1243,9 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+ 
+     struct stat st;
+     if (FileInformationClass != XboxFilePositionInformation) {
++        /* Not for a position query: XAPI SetEndOfFile makes one before it
++         * sets the end of file, and a pending overwrite must survive it. */
++        overwrite_settle(fd);
+         if (fstat(fd, &st) != 0)
+             return STATUS_UNSUCCESSFUL;
+     }
+@@ -1033,11 +1324,33 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+         }
+         case XboxFileEndOfFileInformation: {
+             PXBOX_FILE_END_OF_FILE_INFORMATION info = (PXBOX_FILE_END_OF_FILE_INFORMATION)FileInformation;
++            /* A pending overwrite ends here: ftruncate to the new size keeps
++             * the old bytes below it (see s_overwrite_pending). */
++            overwrite_take(fd);
+             if (ftruncate(fd, (off_t)info->EndOfFile.QuadPart) != 0)
+                 return STATUS_UNSUCCESSFUL;
+             IoStatusBlock->Status = STATUS_SUCCESS;
+             return STATUS_SUCCESS;
+         }
++        case XboxFileAllocationInformation: {
++            /* Reserve space before writing. The Win32 backend already handles
++             * this; POSIX fell through to STATUS_NOT_IMPLEMENTED. A title calls it as it copies textures
++             * into the utility-drive cache.
++             *
++             * NT semantics: an allocation below the end of file truncates to
++             * it; one above only reserves space and leaves the size alone.
++             * POSIX has no portable reservation, and the caller only needs the
++             * write that follows to succeed, so growing is a no-op. */
++            PXBOX_FILE_END_OF_FILE_INFORMATION info =
++                (PXBOX_FILE_END_OF_FILE_INFORMATION)FileInformation;
++            struct stat st;
++            overwrite_settle(fd);
++            if (fstat(fd, &st) == 0 && (off_t)info->EndOfFile.QuadPart < st.st_size
++                    && ftruncate(fd, (off_t)info->EndOfFile.QuadPart) != 0)
++                return STATUS_UNSUCCESSFUL;
++            IoStatusBlock->Status = STATUS_SUCCESS;
++            return STATUS_SUCCESS;
++        }
+         case XboxFileDispositionInformation: {
+             PXBOX_FILE_DISPOSITION_INFORMATION info = (PXBOX_FILE_DISPOSITION_INFORMATION)FileInformation;
+             /* POSIX: unlinking an open file removes it on last close -- this
+@@ -1066,6 +1379,77 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+     }
+ }
+ 
++/* Rename an open file (NtSetInformationFile, FileRenameInformation).
++ *
++ * A title can build each utility-drive cache file as z:\...\name.tmp, then
++ * rename it to name.dat and later open the .dat. With this class
++ * unimplemented the rename failed, so every .dat open failed with
++ * STATUS_OBJECT_NAME_NOT_FOUND and the title rebuilt the cache instead.
++ *
++ * The new name is resolved the way NT does:
++ *   RootDirectory set    relative to that directory handle
++ *   bare name, no root   within the file's own directory
++ *   anything else        a full Xbox path, through the path table
++ * POSIX rename() replaces an existing target, so ReplaceIfExists = FALSE is
++ * checked first. The handle keeps working (the fd follows the inode), and its
++ * recorded path is updated so a later delete-on-close removes the new name. */
++NTSTATUS __stdcall xbox_RenameFileByHandle(
++    HANDLE FileHandle, PXBOX_OBJECT_ATTRIBUTES NewName, BOOLEAN ReplaceIfExists)
++{
++    char dst[MAX_PATH];
++    const char *src = w32_handle_path(FileHandle);
++    const char *name = get_xbox_path(NewName);
++    struct stat st;
++
++    if (!src)
++        return STATUS_INVALID_HANDLE;
++    if (!name || !*name)
++        return STATUS_INVALID_PARAMETER;
++
++    if (NewName->RootDirectory
++            || (!strchr(name, '\\') && !strchr(name, ':'))) {
++        const char *base = NewName->RootDirectory
++                         ? w32_handle_path(NewName->RootDirectory) : src;
++        const char *slash;
++        size_t dir;
++        char *p;
++
++        if (!base)
++            return STATUS_INVALID_HANDLE;
++        if (NewName->RootDirectory) {
++            dir = strlen(base);
++        } else {
++            slash = strrchr(base, '/');
++            dir = slash ? (size_t)(slash - base) : 0;
++        }
++        if (dir + 1 + strlen(name) >= sizeof dst)
++            return STATUS_OBJECT_NAME_INVALID;
++        memcpy(dst, base, dir);
++        dst[dir] = '/';
++        strcpy(dst + dir + 1, name[0] == '\\' ? name + 1 : name);
++        for (p = dst + dir + 1; *p; p++)
++            if (*p == '\\') *p = '/';
++    } else if (!xbox_translate_path(name, dst, MAX_PATH)) {
++        return STATUS_OBJECT_PATH_NOT_FOUND;
++    }
++
++    if (strcmp(src, dst) != 0) {
++        if (!ReplaceIfExists && stat(dst, &st) == 0)
++            return STATUS_OBJECT_NAME_COLLISION;
++        if (rename(src, dst) != 0) {
++            int e = errno;
++            fprintf(stderr, "  [FILE] rename %s -> %s FAILED (%s)\n",
++                    src, dst, strerror(e));
++            fflush(stderr);
++            return errno_to_status(e);
++        }
++    }
++    fprintf(stderr, "  [FILE] rename %s -> %s\n", src, dst);
++    fflush(stderr);
++    w32_handle_set_path(FileHandle, dst);
++    return STATUS_SUCCESS;
++}
++
+ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+     HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
+     PVOID FsInformation, ULONG Length, XBOX_FS_INFORMATION_CLASS FsInformationClass)
+@@ -1124,8 +1508,7 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+ 
+     if (!FileInformation)
+         return STATUS_INVALID_PARAMETER;
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
++    if (!posix_obj_path(ObjectAttributes, host_path, MAX_PATH))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     if (stat(host_path, &st) != 0)
+         return STATUS_OBJECT_NAME_NOT_FOUND;
+@@ -1152,6 +1535,26 @@ static DIR_CONTEXT s_dir_contexts[MAX_DIR_CONTEXTS];
+ static CRITICAL_SECTION s_dir_cs;
+ static BOOL s_dir_cs_init = FALSE;
+ 
++/* As on Win32: a closed directory handle takes its enumeration with it. The
++ * handle is a heap object, and the allocator hands a freed one straight back,
++ * so a search abandoned after one result otherwise resumed under the next
++ * directory opened: its first answer came from the old directory. */
++void xbox_dir_context_drop(HANDLE FileHandle)
++{
++    if (!s_dir_cs_init)
++        return;
++    EnterCriticalSection(&s_dir_cs);
++    for (int i = 0; i < MAX_DIR_CONTEXTS; i++) {
++        if (s_dir_contexts[i].handle == FileHandle) {
++            if (s_dir_contexts[i].dir)
++                closedir(s_dir_contexts[i].dir);
++            s_dir_contexts[i].dir = NULL;
++            s_dir_contexts[i].handle = NULL;
++        }
++    }
++    LeaveCriticalSection(&s_dir_cs);
++}
++
+ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,
+     PXBOX_IO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
+@@ -1340,3 +1743,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
          *ReturnedLength = (ULONG)strlen(target);
      return STATUS_SUCCESS;
  }
@@ -3048,10 +3790,10 @@ index 42135e0..73cfde7 100644
 +    }
 +    return st;
 +}
-diff --git a/src/kernel/kernel_hal.c b/src/kernel/kernel_hal.c
+diff --git c/src/kernel/kernel_hal.c w/src/kernel/kernel_hal.c
 index 1ad4fff..7ba275f 100644
---- a/src/kernel/kernel_hal.c
-+++ b/src/kernel/kernel_hal.c
+--- c/src/kernel/kernel_hal.c
++++ w/src/kernel/kernel_hal.c
 @@ -12,6 +12,7 @@
   */
  
@@ -3154,68 +3896,375 @@ index 1ad4fff..7ba275f 100644
      ExitProcess(0);
  }
  
-diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
-index caf6390..627dbdf 100644
---- a/src/kernel/kernel_path.c
-+++ b/src/kernel/kernel_path.c
-@@ -156,6 +156,19 @@ static int resolve_symlink(const char* xbox_path, char* out, size_t out_size)
+diff --git c/src/kernel/kernel_mods.c w/src/kernel/kernel_mods.c
+new file mode 100644
+index 0000000..d44212d
+--- /dev/null
++++ w/src/kernel/kernel_mods.c
+@@ -0,0 +1,73 @@
++/* Asset mods: whole-file overrides of the game folder (kernel_mods.h). */
++#include "kernel_mods.h"
++
++#include <stdio.h>
++#include <string.h>
++
++static char s_dir[512];
++static char s_names[XBOX_MODS_MAX][128];
++static int s_count;
++
++/* A mod name is one folder inside the mods dir: no separators, no "..". */
++static int name_ok(const char *s)
++{
++    return *s && !strchr(s, '/') && !strchr(s, '\\') && !strstr(s, "..");
++}
++
++int xbox_mods_init(const char *mods_dir)
++{
++    char path[640], line[256];
++    FILE *f;
++
++    s_count = 0;
++    snprintf(s_dir, sizeof s_dir, "%s", mods_dir ? mods_dir : "");
++    if (!s_dir[0])
++        return 0;
++    snprintf(path, sizeof path, "%s/load-order.txt", s_dir);
++    if (!(f = fopen(path, "r")))
++        return 0;
++    while (s_count < XBOX_MODS_MAX && fgets(line, sizeof line, f)) {
++        char *s = line, *e;
++        while (*s == ' ' || *s == '\t')
++            s++;
++        e = s + strlen(s);
++        while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
++            *--e = '\0';
++        if (*s == '#' || !name_ok(s) || (size_t)(e - s) >= sizeof s_names[0])
++            continue;
++        snprintf(s_names[s_count++], sizeof s_names[0], "%s", s);
++    }
++    fclose(f);
++    return s_count;
++}
++
++int xbox_mods_count(void)
++{
++    return s_count;
++}
++
++const char *xbox_mods_dir(void)
++{
++    return s_dir;
++}
++
++const char *xbox_mods_name(int i)
++{
++    return i >= 0 && i < s_count ? s_names[i] : NULL;
++}
++
++int xbox_mods_lookup(const char *rel, char *out, size_t out_size, int (*exists)(char *path))
++{
++    int i;
++    if (!s_count || !rel || !*rel || strstr(rel, ".."))
++        return 0;
++    while (*rel == '/')
++        rel++;
++    for (i = s_count - 1; i >= 0; i--) {
++        if ((size_t)snprintf(out, out_size, "%s/%s/%s", s_dir, s_names[i], rel) >= out_size)
++            continue;
++        if (exists(out))
++            return i + 1;
++    }
++    return 0;
++}
+diff --git c/src/kernel/kernel_mods.h w/src/kernel/kernel_mods.h
+new file mode 100644
+index 0000000..87483f7
+--- /dev/null
++++ w/src/kernel/kernel_mods.h
+@@ -0,0 +1,38 @@
++/*
++ * Asset mods: whole-file overrides of the game folder.
++ *
++ * <mods dir>/load-order.txt lists the enabled mods, one folder name per line
++ * (blank lines and lines starting with '#' are skipped); a later line wins
++ * over an earlier one. Each mod folder mirrors the game folder, so
++ * mods/<name>/data/x.big replaces game/data/x.big. Mods are only read.
++ */
++#ifndef XBOX_KERNEL_MODS_H
++#define XBOX_KERNEL_MODS_H
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define XBOX_MODS_MAX 64
++
++/* Reads <mods_dir>/load-order.txt. Returns the number of mods enabled (0 when
++ * the folder or the file is missing). Calling it again starts over. */
++int xbox_mods_init(const char *mods_dir);
++
++int xbox_mods_count(void);
++const char *xbox_mods_dir(void);        /* the folder given to xbox_mods_init */
++const char *xbox_mods_name(int i);      /* in load order, 0 = lowest priority */
++
++/* rel: a path relative to the game folder, '/' separators. Tries each enabled
++ * mod, last first. exists() gets a candidate host path, may fix its letter case
++ * in place, and returns nonzero when that file is there. On a hit the host
++ * path is in out and the return value is the mod's index + 1; 0 = no mod has it. */
++int xbox_mods_lookup(const char *rel, char *out, size_t out_size, int (*exists)(char *path));
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git c/src/kernel/kernel_path.c w/src/kernel/kernel_path.c
+index caf6390..36a6f66 100644
+--- c/src/kernel/kernel_path.c
++++ w/src/kernel/kernel_path.c
+@@ -16,6 +16,40 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <ctype.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include "kernel_mods.h"
++
++/* Asset mods (kernel_mods.h): RECOMP_MODS_DIR, default "mods" in the working
++ * directory. Read when the paths are set up; game-folder opens look there first. */
++static void mods_setup(void)
++{
++    const char *d = getenv("RECOMP_MODS_DIR");
++    int n = xbox_mods_init(d && *d ? d : "mods");
++    for (int i = 0; i < n; i++)
++        xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "asset mod %d of %d: %s", i + 1, n, xbox_mods_name(i));
++}
++
++/* Logs a replaced file the first time only: the streamer reopens archives. */
++static void mods_log_hit(const char *rel, int mod)
++{
++    static uint32_t seen[1024];
++    uint32_t h = 2166136261u;
++    for (const char *s = rel; *s; s++)
++        h = (h ^ (uint32_t)tolower((unsigned char)*s)) * 16777619u;
++    h |= 1;                                     /* 0 marks an empty slot */
++    for (uint32_t i = 0; i < 1024; i++) {
++        uint32_t *slot = &seen[(h + i) & 1023];
++        if (*slot == h)
++            return;
++        if (!*slot) {
++            *slot = h;
++            break;
++        }
++    }
++    xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "asset mod %s replaces %s", xbox_mods_name(mod - 1), rel);
++}
++#include <stdlib.h>
+ 
+ /* A project may set this to watch every guest path the kernel translates (for
+  * example to print who opened a file). NULL by default. */
+@@ -40,13 +74,26 @@ static int match_prefix(const char* path, const char* prefix)
+ /* A device-path translation rule, shared by both backends. */
+ typedef struct {
+     const char* prefix;     /* Xbox path prefix (backslash form)         */
+-    int         to_save;    /* 1 = under save_dir, 0 = under game_dir    */
++    int         to_save;    /* 1 = under save_dir, 0 = under game_dir,
++                               2 = under the user-data root (save_dir, or
++                               RECOMP_SAVE_DIR when set)                  */
+     const char* sub_win;    /* sub-directory, Win32 backslash form       */
+     const char* sub_posix;  /* sub-directory, POSIX slash form           */
+ } path_rule;
+ 
+ static const path_rule s_rules[] = {
+     { "\\Device\\CdRom0\\",                   0, NULL,         NULL          },
++    /* Saves. Titles map U: and T: themselves (XapiMapLetterToDirectory) to
++     * E:\UDATA\<title id> and E:\TDATA\<title id>, which are under
++     * Partition1. Without these two rules the Partition1 rule below put every
++     * save in the game dir, shared by all runs and all save dirs: a fresh
++     * XDG_DATA_HOME still saw the last run's save game. Listed first so they
++     * win over Partition1; no trailing separator, the title opens the bare
++     * directories too. RECOMP_SAVE_DIR moves just these two (to_save 2), so a
++     * scripted run can start from an empty save without touching the rest of
++     * the save dir (partition images, caches). */
++    { "\\Device\\Harddisk0\\Partition1\\UDATA", 2, "\\UDATA",  "/UDATA"      },
++    { "\\Device\\Harddisk0\\Partition1\\TDATA", 2, "\\TDATA",  "/TDATA"      },
+     { "\\Device\\Harddisk0\\Partition1\\",    0, NULL,         NULL          },
+     /* The rest of the disk. Partition 0 is the whole raw device, 2 holds
+      * system data, and 3-5 are the per-title caches behind X:, Y: and Z:.
+@@ -85,6 +132,25 @@ static const path_rule s_rules[] = {
+ };
+ #define PATH_RULE_COUNT ((int)(sizeof(s_rules) / sizeof(s_rules[0])))
+ 
++/* Match a rule. The UDATA and TDATA rules carry no trailing separator, since
++ * a title opens the bare directories too, so they stop at one: otherwise
++ * Partition1\UDATAx would be taken for Partition1\UDATA\x. */
++static int rule_match(const char* path, const path_rule* r)
++{
++    int skip = match_prefix(path, r->prefix);
++    if (skip && r->to_save == 2 && path[skip] && path[skip] != '\\')
++        return 0;
++    return skip;
++}
++
++/* Saves left in the game dir. Builds before the UDATA/TDATA rules sent all
++ * of Partition1 there, so a player's saves may be in <game_dir>/UDATA. With
++ * RECOMP_SAVE_DIR unset, no UDATA in the save dir and one in the game dir,
++ * xbox_path_init keeps using that one (and says so); the same for TDATA.
++ * Indexed 0 for UDATA, 1 for TDATA. */
++static int s_user_in_game[2];
++#define USER_RULE_SLOT(r) ((r)->sub_posix[1] == 'T')
++
+ /*
+  * Rewrite a path through a drive letter the title mapped for itself.
+  *
+@@ -156,6 +222,7 @@ static int resolve_symlink(const char* xbox_path, char* out, size_t out_size)
      return 0;
  }
  
-+/* RECOMP_SAVE_DIR=<dir> moves the title's UDATA and TDATA trees (its saves
-+ * and title data, opened through Partition1 and so otherwise under the game
-+ * dir) into <dir>: scripted test runs get their own save files -- a fixture
-+ * copied in -- and never touch the player's. Returns 1 when `rem`, the part
-+ * of a game-dir path below the root, is one of those trees. */
-+static int is_title_save_path(const char *rem)
-+{
-+    int n = match_prefix(rem, "UDATA");
-+    if (!n)
-+        n = match_prefix(rem, "TDATA");
-+    return n && (rem[n] == '\0' || rem[n] == '\\' || rem[n] == '/');
-+}
 +
  /* ======================================================================== */
  /* Shared by both backends, for the same reason as xbox_LastFileError: the
   * bridge calls it unconditionally, and a _WIN32-only definition breaks every
-@@ -177,6 +190,7 @@ const wchar_t *xbox_LastHostPath(void)
+@@ -176,6 +243,7 @@ const wchar_t *xbox_LastHostPath(void)
+ 
  static WCHAR s_game_dir[MAX_PATH];
  static WCHAR s_save_dir[MAX_PATH];
++static WCHAR s_user_dir[MAX_PATH];   /* UDATA/TDATA root: s_save_dir or RECOMP_SAVE_DIR */
  static BOOL  s_initialized = FALSE;
-+static WCHAR s_title_save_dir[MAX_PATH];   /* RECOMP_SAVE_DIR, or empty */
  
  /*
-  * The raw disk device, \Device\Harddisk0\Partition0.
-@@ -374,6 +388,19 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+@@ -274,6 +342,8 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+ {
+     WCHAR save_base[MAX_PATH];
+ 
++    mods_setup();
++
+     /* The fallbacks used to name Burnout 3 specifically, so any other title
+      * that passed NULL silently pointed its game dir and its saves at another
+      * game's folders. Generic now -- a caller that wants a title-specific
+@@ -374,8 +444,54 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
          }
      }
  
++    /* RECOMP_SAVE_DIR: the root for the title's UDATA and TDATA, created if
++     * missing. Absolute; under Wine a DOS path (Z:\home\...) is safest. */
 +    {
-+        const char *env = getenv("RECOMP_SAVE_DIR");
-+        s_title_save_dir[0] = L'\0';
-+        if (env && *env) {
-+            WCHAR w[MAX_PATH];
-+            MultiByteToWideChar(CP_UTF8, 0, env, -1, w, MAX_PATH);
-+            if (!GetFullPathNameW(w, MAX_PATH, s_title_save_dir, NULL))
-+                wcscpy_s(s_title_save_dir, MAX_PATH, w);
-+            SHCreateDirectoryExW(NULL, s_title_save_dir, NULL);
-+            fprintf(stderr, "[PATH] title saves (UDATA/TDATA) -> %S\n", s_title_save_dir);
++        const char *ov = getenv("RECOMP_SAVE_DIR");
++        /* Room for the longest suffix the rules append (UDATA\<title id>\
++         * <save>\<file>); a longer root would only truncate later. */
++        int n = (ov && ov[0])
++              ? MultiByteToWideChar(CP_UTF8, 0, ov, -1, s_user_dir, MAX_PATH) : 0;
++        if (ov && ov[0] && (n == 0 || n > MAX_PATH - 96)) {
++            xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH,
++                     "RECOMP_SAVE_DIR %s: %s; using the default save dir",
++                     ov, n == 0 ? "conversion failed (longer than MAX_PATH?)" : "too long for the paths under it");
++            ov = NULL;
++        }
++        if (ov && ov[0]) {
++            for (WCHAR *p = s_user_dir; *p; p++)
++                if (*p == L'/') *p = L'\\';
++            len = wcslen(s_user_dir);
++            if (len > 3 && s_user_dir[len - 1] == L'\\')
++                s_user_dir[len - 1] = L'\0';
++            SHCreateDirectoryExW(NULL, s_user_dir, NULL);
++        } else {
++            wcscpy_s(s_user_dir, MAX_PATH, s_save_dir);
++        }
++
++        /* Saves still in the game dir stay there (s_user_in_game). */
++        for (int k = 0; k < 2; k++) {
++            static const WCHAR *names[2] = { L"UDATA", L"TDATA" };
++            WCHAR in_save[MAX_PATH], in_game[MAX_PATH];
++            DWORD fa, fg;
++            swprintf_s(in_save, MAX_PATH, L"%s\\%s", s_save_dir, names[k]);
++            swprintf_s(in_game, MAX_PATH, L"%s\\%s", s_game_dir, names[k]);
++            fa = GetFileAttributesW(in_save);
++            fg = GetFileAttributesW(in_game);
++            s_user_in_game[k] = !(ov && ov[0]) && fa == INVALID_FILE_ATTRIBUTES
++                             && fg != INVALID_FILE_ATTRIBUTES
++                             && (fg & FILE_ATTRIBUTE_DIRECTORY);
++            if (s_user_in_game[k])
++                xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH,
++                         "%S: saves found here and not in the save dir; kept "
++                         "here (move it to %S to use the save dir)",
++                         in_game, in_save);
 +        }
 +    }
 +
      s_initialized = TRUE;
-     xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%S, save=%S", s_game_dir, s_save_dir);
+-    xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%S, save=%S", s_game_dir, s_save_dir);
++    xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%S, save=%S, udata/tdata=%S",
++             s_game_dir, s_save_dir, s_user_dir);
  }
-@@ -424,6 +451,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+ 
+ /* The host path the last translation produced.
+@@ -394,6 +510,16 @@ static void xbox_remember_host_path(const wchar_t *p)
+ 
+ 
+ 
++/* For xbox_mods_lookup: Windows paths are case-insensitive already. */
++static int win_file_exists(char *path)
++{
++    WCHAR w[MAX_PATH];
++    DWORD a;
++    MultiByteToWideChar(CP_UTF8, 0, path, -1, w, MAX_PATH);
++    a = GetFileAttributesW(w);
++    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
++}
++
+ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
+ {
+     const char*  remainder = NULL;
+@@ -420,10 +546,13 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+     }
+ 
+     for (int i = 0; i < PATH_RULE_COUNT; i++) {
+-        skip = match_prefix(xbox_path, s_rules[i].prefix);
++        skip = rule_match(xbox_path, &s_rules[i]);
          if (skip) {
              remainder = xbox_path + skip;
-             base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
-+            if (!s_rules[i].to_save && s_title_save_dir[0] && is_title_save_path(remainder))
-+                base_dir = s_title_save_dir;
+-            base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
++            base_dir  = s_rules[i].to_save == 2
++                          ? (s_user_in_game[USER_RULE_SLOT(&s_rules[i])]
++                               ? s_game_dir : s_user_dir)
++                      : s_rules[i].to_save     ? s_save_dir : s_game_dir;
              sub_dir   = s_rules[i].sub_win;
              goto translate;
          }
-@@ -485,10 +514,15 @@ translate:
+@@ -446,6 +575,22 @@ translate:
+             if (*p == L'/') *p = L'\\';
+         }
+ 
++        if (!sub_dir && base_dir == s_game_dir) {   /* a game file: an asset mod may replace it */
++            char rel[MAX_PATH], mod_path[MAX_PATH];
++            int mod;
++            snprintf(rel, sizeof(rel), "%s", remainder);
++            for (char* p = rel; *p; p++)
++                if (*p == '\\') *p = '/';
++            if ((mod = xbox_mods_lookup(rel, mod_path, sizeof(mod_path), win_file_exists)) != 0) {
++                mods_log_hit(rel, mod);
++                MultiByteToWideChar(CP_UTF8, 0, mod_path, -1, host_path_buf, buf_size);
++                for (WCHAR* p = host_path_buf; *p; p++)
++                    if (*p == L'/') *p = L'\\';
++                xbox_remember_host_path(host_path_buf);
++                return TRUE;
++            }
++        }
++
+         if (sub_dir) {
+             WCHAR sub_wide[MAX_PATH];
+             MultiByteToWideChar(CP_ACP, 0, sub_dir, -1, sub_wide, MAX_PATH);
+@@ -453,7 +598,7 @@ translate:
+ 
+             WCHAR dir_path[MAX_PATH];
+             swprintf_s(dir_path, MAX_PATH, L"%s%s", base_dir, sub_wide);
+-            CreateDirectoryW(s_save_dir, NULL);
++            CreateDirectoryW(base_dir, NULL);
+             CreateDirectoryW(dir_path, NULL);
+         } else {
+             swprintf_s(host_path_buf, buf_size, L"%s\\%s", base_dir, remainder_wide);
+@@ -485,9 +630,14 @@ translate:
  #include <sys/stat.h>
  #include <sys/types.h>
  #include <errno.h>
@@ -3226,12 +4275,11 @@ index caf6390..627dbdf 100644
  
  static char s_game_dir[MAX_PATH];
  static char s_save_dir[MAX_PATH];
++static char s_user_dir[MAX_PATH];   /* UDATA/TDATA root: s_save_dir or RECOMP_SAVE_DIR */
  static BOOL s_initialized = FALSE;
-+static char s_title_save_dir[MAX_PATH];    /* RECOMP_SAVE_DIR, or empty */
  
  /* Strip a single trailing '/' (but never the root '/'). */
- static void strip_trailing_slash(char* s)
-@@ -519,6 +553,8 @@ static void mkdir_p(const char* path)
+@@ -519,8 +669,11 @@ static void mkdir_p(const char* path)
          xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "mkdir %s: %s", tmp, strerror(errno));
  }
  
@@ -3239,8 +4287,11 @@ index caf6390..627dbdf 100644
 +
  void xbox_path_init(const char* game_dir, const char* save_dir)
  {
++    mods_setup();
      if (game_dir) {
-@@ -548,11 +584,187 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+         snprintf(s_game_dir, sizeof(s_game_dir), "%s", game_dir);
+     } else {
+@@ -548,9 +701,212 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
      strip_trailing_slash(s_game_dir);
      strip_trailing_slash(s_save_dir);
  
@@ -3257,27 +4308,56 @@ index caf6390..627dbdf 100644
 +        xbox_create_partition_images();
 +    }
 +
++    /* RECOMP_SAVE_DIR: the root for the title's UDATA and TDATA, created if
++     * missing, so a scripted run can start from an empty save. */
 +    {
-+        const char *env = getenv("RECOMP_SAVE_DIR");
-+        s_title_save_dir[0] = '\0';
-+        if (env && *env) {
-+            if (!realpath(env, s_title_save_dir))
-+                snprintf(s_title_save_dir, sizeof(s_title_save_dir), "%s", env);
-+            mkdir_p(s_title_save_dir);
-+            strip_trailing_slash(s_title_save_dir);
-+            fprintf(stderr, "[PATH] title saves (UDATA/TDATA) -> %s\n", s_title_save_dir);
++        const char* ov = getenv("RECOMP_SAVE_DIR");
++        if (ov && ov[0]) {
++            snprintf(s_user_dir, sizeof(s_user_dir), "%s", ov);
++            strip_trailing_slash(s_user_dir);
++            mkdir_p(s_user_dir);
++        } else {
++            snprintf(s_user_dir, sizeof(s_user_dir), "%s", s_save_dir);
++        }
++
++        /* Saves still in the game dir stay there (s_user_in_game). */
++        for (int k = 0; k < 2; k++) {
++            static const char *names[2] = { "UDATA", "TDATA" };
++            char in_save[MAX_PATH], in_game[MAX_PATH];
++            struct stat sa, sg;
++            snprintf(in_save, sizeof(in_save), "%s/%s", s_save_dir, names[k]);
++            snprintf(in_game, sizeof(in_game), "%s/%s", s_game_dir, names[k]);
++            s_user_in_game[k] = !(ov && ov[0]) && stat(in_save, &sa) != 0
++                             && stat(in_game, &sg) == 0 && S_ISDIR(sg.st_mode);
++            if (s_user_in_game[k])
++                xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH,
++                         "%s: saves found here and not in the save dir; kept "
++                         "here (move it to %s to use the save dir)",
++                         in_game, in_save);
 +        }
 +    }
 +
      s_initialized = TRUE;
-     xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%s, save=%s",
-              s_game_dir, s_save_dir);
- }
- 
+-    xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%s, save=%s",
+-             s_game_dir, s_save_dir);
++    xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%s, save=%s, udata/tdata=%s",
++             s_game_dir, s_save_dir, s_user_dir);
++}
++
 +/* Xbox paths are case-insensitive, the host's are not. If `path` does not
 + * exist, walk it component by component and substitute the on-disk spelling
 + * of any component that only differs in case. Leaves `path` alone when no
 + * match exists (a create, for instance). */
++static void fix_path_case(char *path);
++
++/* For xbox_mods_lookup: the candidate's case fixed as for game files, then a file test. */
++static int posix_file_exists(char *path)
++{
++    struct stat st;
++    fix_path_case(path);
++    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
++}
++
 +static void fix_path_case(char *path)
 +{
 +    char out[MAX_PATH];
@@ -3423,12 +4503,10 @@ index caf6390..627dbdf 100644
 +            xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "%s: %s", image, strerror(errno));
 +        close(fd);
 +    }
-+}
-+
+ }
+ 
  BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
- {
-     const char* remainder = NULL;
-@@ -566,6 +778,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -566,6 +922,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
      if (!s_initialized)
          xbox_path_init(NULL, NULL);
  
@@ -3438,27 +4516,44 @@ index caf6390..627dbdf 100644
      {
          char linked[512];
          if (resolve_symlink(xbox_path, linked, sizeof(linked)))
-@@ -577,6 +792,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -573,10 +932,13 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+     }
+ 
+     for (int i = 0; i < PATH_RULE_COUNT; i++) {
+-        skip = match_prefix(xbox_path, s_rules[i].prefix);
++        skip = rule_match(xbox_path, &s_rules[i]);
          if (skip) {
              remainder = xbox_path + skip;
-             base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
-+            if (!s_rules[i].to_save && s_title_save_dir[0] && is_title_save_path(remainder))
-+                base_dir = s_title_save_dir;
+-            base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
++            base_dir  = s_rules[i].to_save == 2
++                          ? (s_user_in_game[USER_RULE_SLOT(&s_rules[i])]
++                               ? s_game_dir : s_user_dir)
++                      : s_rules[i].to_save     ? s_save_dir : s_game_dir;
              sub_dir   = s_rules[i].sub_posix;
              goto translate;
          }
-@@ -616,6 +833,7 @@ translate:
+@@ -616,6 +978,17 @@ translate:
                  host_path_buf[--n] = '\0';
          }
  
++        if (!sub_dir && base_dir == s_game_dir) {   /* a game file: an asset mod may replace it */
++            char mod_path[MAX_PATH];
++            int mod = xbox_mods_lookup(remainder_posix, mod_path, sizeof(mod_path), posix_file_exists);
++            if (mod) {
++                mods_log_hit(remainder_posix, mod);
++                snprintf(host_path_buf, buf_size, "%s", mod_path);
++                return TRUE;
++            }
++        }
++
 +        fix_path_case(host_path_buf);
          XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
          return TRUE;
      }
-diff --git a/src/kernel/kernel_rtl.c b/src/kernel/kernel_rtl.c
+diff --git c/src/kernel/kernel_rtl.c w/src/kernel/kernel_rtl.c
 index 9760735..1f5cc05 100644
---- a/src/kernel/kernel_rtl.c
-+++ b/src/kernel/kernel_rtl.c
+--- c/src/kernel/kernel_rtl.c
++++ w/src/kernel/kernel_rtl.c
 @@ -8,6 +8,7 @@
   */
  
@@ -3546,10 +4641,10 @@ index 9760735..1f5cc05 100644
  VOID __stdcall xbox_RtlInitializeCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
  {
      /* Creating the shadow here is not required -- Enter does it -- but doing
-diff --git a/src/kernel/kernel_thunks.c b/src/kernel/kernel_thunks.c
+diff --git c/src/kernel/kernel_thunks.c w/src/kernel/kernel_thunks.c
 index 4fd7692..d943575 100644
---- a/src/kernel/kernel_thunks.c
-+++ b/src/kernel/kernel_thunks.c
+--- c/src/kernel/kernel_thunks.c
++++ w/src/kernel/kernel_thunks.c
 @@ -18,6 +18,7 @@
   */
  
@@ -3567,34 +4662,53 @@ index 4fd7692..d943575 100644
              if (entry == 0) {
                  break;  /* rest of the table is empty */
              }
-diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
-index 4ebdfb9..6508945 100644
---- a/src/kernel/kernel_xbox.c
-+++ b/src/kernel/kernel_xbox.c
-@@ -11,6 +11,8 @@
+diff --git c/src/kernel/kernel_xbox.c w/src/kernel/kernel_xbox.c
+index 4ebdfb9..2134e8a 100644
+--- c/src/kernel/kernel_xbox.c
++++ w/src/kernel/kernel_xbox.c
+@@ -11,6 +11,9 @@
  
  #include "kernel.h"
  #include <string.h>
 +#include <stdio.h>
 +#include <stdlib.h>
++#include <time.h>
  
  /* ============================================================================
   * Exported Data Objects
-@@ -125,11 +127,63 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
+@@ -123,13 +126,94 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
+  *   - Language: English
+  *   - Audio: Stereo, Dolby Digital
   *   - DVD Region: Region 1 (North America)
++ *   - Time zone: the host's
   * ============================================================================ */
  
-+/* The console's time zone, from the host's (Windows GetTimeZoneInformation):
-+ * EEPROM holds the bias (UTC = local + bias, minutes), the standard and
-+ * daylight biases and the dates DST starts and ends (month, week-of-month
-+ * "day", day of week, hour). Without it XAPI's local time was UTC -- SSX 3
-+ * stamped saves two hours off in CEST. */
++/* The console's time zone. The EEPROM holds the bias (UTC = local + bias,
++ * in minutes), the standard and daylight biases added to it, four-character
++ * names, and the dates daylight time starts and ends (month, week of the
++ * month, day of the week, hour). XAPI turns the UTC clock into local time
++ * with these, so a fixed zone stamps saves and clocks hours off anywhere
++ * else: SSX 3 dated its saves two hours early in CEST.
++ *
++ * Windows has all of it (GetTimeZoneInformation). POSIX hosts give the
++ * offset in effect now and the zone names, not the rule: the bias is the
++ * current offset with no daylight dates, which is right until the next
++ * change of clocks during a run. */
 +typedef struct { uint8_t month, day, dow, hour; } XboxTzDate;
 +static struct {
 +    int32_t bias, std_bias, dlt_bias;
 +    XboxTzDate std_date, dlt_date;
 +    char std_name[4], dlt_name[4];
 +} s_tz;
++
++static void tz_name4(char out[4], const char *src)
++{
++    int k;
++    for (k = 0; k < 4; k++) {
++        char c = (src && *src) ? *src++ : 0;
++        out[k] = (c >= 0x20 && c < 0x7F) ? c : (c ? '?' : 0);
++    }
++}
 +
 +static void tz_init(void)
 +{
@@ -3605,6 +4719,7 @@ index 4ebdfb9..6508945 100644
 +#ifdef _WIN32
 +    {
 +        TIME_ZONE_INFORMATION tzi;
++        char sn[5], dn[5];
 +        int k;
 +        memset(&tzi, 0, sizeof tzi);
 +        GetTimeZoneInformation(&tzi);
@@ -3619,11 +4734,23 @@ index 4ebdfb9..6508945 100644
 +        s_tz.dlt_date.day = (uint8_t)tzi.DaylightDate.wDay;
 +        s_tz.dlt_date.dow = (uint8_t)tzi.DaylightDate.wDayOfWeek;
 +        s_tz.dlt_date.hour = (uint8_t)tzi.DaylightDate.wHour;
-+        /* Four characters each, from the first letters of the names. */
 +        for (k = 0; k < 4; k++) {
-+            s_tz.std_name[k] = (char)(tzi.StandardName[k] < 128 ? tzi.StandardName[k] : '?');
-+            s_tz.dlt_name[k] = (char)(tzi.DaylightName[k] < 128 ? tzi.DaylightName[k] : '?');
++            sn[k] = (char)(tzi.StandardName[k] < 128 ? tzi.StandardName[k] : '?');
++            dn[k] = (char)(tzi.DaylightName[k] < 128 ? tzi.DaylightName[k] : '?');
 +        }
++        sn[4] = dn[4] = 0;
++        tz_name4(s_tz.std_name, sn);
++        tz_name4(s_tz.dlt_name, dn);
++    }
++#else
++    {
++        time_t now = time(NULL);
++        struct tm lt;
++        tzset();
++        if (localtime_r(&now, &lt))
++            s_tz.bias = (int32_t)(-lt.tm_gmtoff / 60);
++        tz_name4(s_tz.std_name, tzname[0]);
++        tz_name4(s_tz.dlt_name, tzname[1]);
 +    }
 +#endif
 +}
@@ -3644,7 +4771,7 @@ index 4ebdfb9..6508945 100644
  
      xbox_log(XBOX_LOG_DEBUG, XBOX_LOG_XBOX,
          "ExQueryNonVolatileSetting: index=0x%02X len=%u", ValueIndex, ValueLength);
-@@ -194,14 +248,58 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
+@@ -194,14 +278,63 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
          break;
  
      case XC_TIMEZONE_BIAS:
@@ -3679,10 +4806,12 @@ index 4ebdfb9..6508945 100644
 +        break;
 +
 +    case XC_MAX_OS: {
-+        /* The whole user-settings block (EEPROM 0x60..): checksum, bias,
-+         * std/dlt names, 8 reserved, std/dlt dates, 8 reserved, std/dlt bias,
-+         * language, video, audio, parental x3, online x4, misc, DVD region. */
-+        uint8_t blk[0x5C];
++        /* The whole user-settings block (EEPROM 0x60..), which XAPI reads in
++         * one go: checksum, bias, std/dlt names, 8 reserved, std/dlt dates,
++         * 8 reserved, std/dlt bias, language, video, audio, parental x3,
++         * online x4, misc, DVD region -- the same values as the single
++         * queries above. Answering it with zeroes put every title in UTC. */
++        uint8_t blk[0x60];
 +        memset(blk, 0, sizeof blk);
 +        memcpy(blk + 0x04, &s_tz.bias, 4);
 +        memcpy(blk + 0x08, s_tz.std_name, 4);
@@ -3693,23 +4822,26 @@ index 4ebdfb9..6508945 100644
 +        memcpy(blk + 0x2C, &s_tz.dlt_bias, 4);
 +        { ULONG v = 1; memcpy(blk + 0x30, &v, 4); }                       /* English */
 +        { ULONG v = XC_VIDEO_FLAGS_WIDESCREEN | XC_VIDEO_FLAGS_HDTV; memcpy(blk + 0x34, &v, 4); }
-+        { ULONG v = 1; memcpy(blk + 0x58, &v, 4); }                       /* DVD region 1 */
-+        memcpy(Value, blk, ValueLength < sizeof blk ? ValueLength : sizeof blk);
++        /* 0x58 is MiscFlags (0); DvdRegion is the last field, at 0x5C. */
++        { ULONG v = 1; memcpy(blk + 0x5C, &v, 4); }                       /* DVD region 1 */
++        if (Type) *Type = 3;
++        if (ResultLength) *ResultLength = sizeof blk;
++        if (ValueLength < sizeof blk)
++            return 0xC0000023L;                       /* STATUS_BUFFER_TOO_SMALL */
++        memcpy(Value, blk, sizeof blk);
 +        if (ValueLength > sizeof blk)
 +            memset((uint8_t *)Value + sizeof blk, 0, ValueLength - sizeof blk);
-+        if (Type) *Type = 3;
-+        if (ResultLength) *ResultLength = ValueLength < sizeof blk ? ValueLength : sizeof blk;
 +        break;
 +    }
 +
      default:
          xbox_log(XBOX_LOG_WARN, XBOX_LOG_XBOX,
              "ExQueryNonVolatileSetting: unhandled index 0x%02X", ValueIndex);
-diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
+diff --git c/src/kernel/nv2a_backend.h w/src/kernel/nv2a_backend.h
 new file mode 100644
 index 0000000..2102f59
 --- /dev/null
-+++ b/src/kernel/nv2a_backend.h
++++ w/src/kernel/nv2a_backend.h
 @@ -0,0 +1,99 @@
 +/**
 + * Pluggable GPU backend for the pushbuffer executor.
@@ -3810,10 +4942,10 @@ index 0000000..2102f59
 +void nv2a_exec_set_backend(const Nv2aBackend *b);
 +
 +#endif
-diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+diff --git c/src/kernel/nv2a_pb_exec.c w/src/kernel/nv2a_pb_exec.c
 index c65632c..35cb429 100644
---- a/src/kernel/nv2a_pb_exec.c
-+++ b/src/kernel/nv2a_pb_exec.c
+--- c/src/kernel/nv2a_pb_exec.c
++++ w/src/kernel/nv2a_pb_exec.c
 @@ -25,6 +25,7 @@
   * <prefix>NNN.bmp, so the result can be looked at without a display.
   */
@@ -5720,10 +6852,10 @@ index c65632c..35cb429 100644
 +        fputc('\n', f);
 +    }
 +}
-diff --git a/src/kernel/nv2a_pb_scan.c b/src/kernel/nv2a_pb_scan.c
+diff --git c/src/kernel/nv2a_pb_scan.c w/src/kernel/nv2a_pb_scan.c
 index 65bbedb..410e2df 100644
---- a/src/kernel/nv2a_pb_scan.c
-+++ b/src/kernel/nv2a_pb_scan.c
+--- c/src/kernel/nv2a_pb_scan.c
++++ w/src/kernel/nv2a_pb_scan.c
 @@ -1,3 +1,5 @@
 +#include "kernel.h"
 +#include "guest_ptr.h"
@@ -5953,10 +7085,10 @@ index 65bbedb..410e2df 100644
  {
      uint32_t words, jumps = 0, unknown = 0;
  
-diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
+diff --git c/src/kernel/nv2a_vsh_interp.c w/src/kernel/nv2a_vsh_interp.c
 index 7fae74c..53faba3 100644
---- a/src/kernel/nv2a_vsh_interp.c
-+++ b/src/kernel/nv2a_vsh_interp.c
+--- c/src/kernel/nv2a_vsh_interp.c
++++ w/src/kernel/nv2a_vsh_interp.c
 @@ -39,6 +39,7 @@ static float    s_const[NV2A_VSH_CONSTANTS][4];
  static uint32_t s_load_slot, s_load_word, s_start_slot;
  static uint32_t s_const_load, s_const_word;
@@ -6396,10 +7528,10 @@ index 7fae74c..53faba3 100644
              memcpy(out->fog, outregs[5], sizeof out->fog);
              memcpy(out->tex[0], outregs[9], sizeof out->tex[0]);
              memcpy(out->tex[1], outregs[10], sizeof out->tex[1]);
-diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
+diff --git c/src/kernel/nv2a_vsh_interp.h w/src/kernel/nv2a_vsh_interp.h
 index 8acb0af..aa6c0e8 100644
---- a/src/kernel/nv2a_vsh_interp.h
-+++ b/src/kernel/nv2a_vsh_interp.h
+--- c/src/kernel/nv2a_vsh_interp.h
++++ w/src/kernel/nv2a_vsh_interp.h
 @@ -43,12 +43,35 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
  void nv2a_vsh_set_constant_load(uint32_t index);      /* _CONSTANT_LOAD     */
  void nv2a_vsh_constant_word(uint32_t word);           /* _CONSTANT(i)       */
@@ -6436,10 +7568,10 @@ index 8acb0af..aa6c0e8 100644
  
  /* Direct access, for the self-test. */
  void nv2a_vsh_set_constant(uint32_t index, const float v[4]);
-diff --git a/src/kernel/recomp_trace.c b/src/kernel/recomp_trace.c
+diff --git c/src/kernel/recomp_trace.c w/src/kernel/recomp_trace.c
 index 0b2d723..f612ac4 100644
---- a/src/kernel/recomp_trace.c
-+++ b/src/kernel/recomp_trace.c
+--- c/src/kernel/recomp_trace.c
++++ w/src/kernel/recomp_trace.c
 @@ -12,6 +12,7 @@
   */
  
@@ -6501,10 +7633,10 @@ index 0b2d723..f612ac4 100644
          fputc('\n', stderr);
      fflush(stderr);
  }
-diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+diff --git c/src/kernel/xbox_memory_layout.c w/src/kernel/xbox_memory_layout.c
 index 72d5131..2ae386e 100644
---- a/src/kernel/xbox_memory_layout.c
-+++ b/src/kernel/xbox_memory_layout.c
+--- c/src/kernel/xbox_memory_layout.c
++++ w/src/kernel/xbox_memory_layout.c
 @@ -191,11 +191,11 @@ static const struct { uint32_t offset; uint32_t busy_mask; } NV2A_ACK[] = {
       *
       * Holding them at zero is correct rather than convenient: nothing here
@@ -6629,9 +7761,10 @@ index 72d5131..2ae386e 100644
 -        *(volatile uint32_t *)((uintptr_t)(dev + g_frame_counters[i].counter_off)
 -                               + g_memory_offset) += 1;
 +        *(volatile uint32_t *)((uintptr_t)XBOX_HOST(dev + g_frame_counters[i].counter_off)) += 1;
-+    }
-+}
-+
+     }
+ }
+ 
+-static void fence_mirrors_tick(void)
 +/* Asynchronous pushbuffer execution (RECOMP_NV2A_ACK_THREAD): the title no
 + * longer waits for each batch to be drawn, so "everything submitted is
 + * complete" stops being true and the fence must say how far execution really
@@ -6641,7 +7774,7 @@ index 72d5131..2ae386e 100644
 + * fence (SSX 3 guest 0x00234870). The executor calls this as it executes the
 + * method; in that mode the mirror below stands down. */
 +static int nv2a_async(void)
-+{
+ {
 +    static int on = -1;
 +    if (on < 0) {
 +        const char *e = getenv("RECOMP_NV2A_ACK_THREAD");
@@ -6656,24 +7789,6 @@ index 72d5131..2ae386e 100644
 +        return;
 +    if (g_nv2a_memory)
 +        *(volatile uint32_t *)((char *)g_nv2a_memory + 0x400B10) = value;
-+    for (int i = 0; i < g_fence_mirror_count; i++) {
-+        uint32_t dev, get_ptr;
-+
-+        if (!fence_readable(g_fence_mirrors[i].device_ptr_va, 4))
-+            continue;
-+        dev = *(volatile uint32_t *)((uintptr_t)XBOX_HOST(g_fence_mirrors[i].device_ptr_va));
-+        if (!fence_readable(dev + g_fence_mirrors[i].get_ptr_off, 4))
-+            continue;
-+        get_ptr = *(volatile uint32_t *)((uintptr_t)XBOX_HOST(dev + g_fence_mirrors[i].get_ptr_off));
-+        if (fence_readable(get_ptr, 4))
-+            *(volatile uint32_t *)((uintptr_t)XBOX_HOST(get_ptr)) = value;
-     }
- }
- 
- static void fence_mirrors_tick(void)
- {
-+    if (nv2a_async())
-+        return;             /* the executor's semaphore releases own the fence */
      for (int i = 0; i < g_fence_mirror_count; i++) {
          uint32_t dev, get_ptr;
  
@@ -6681,6 +7796,24 @@ index 72d5131..2ae386e 100644
              continue;
 -        dev = *(volatile uint32_t *)((uintptr_t)g_fence_mirrors[i].device_ptr_va
 -                                     + g_memory_offset);
++        dev = *(volatile uint32_t *)((uintptr_t)XBOX_HOST(g_fence_mirrors[i].device_ptr_va));
++        if (!fence_readable(dev + g_fence_mirrors[i].get_ptr_off, 4))
++            continue;
++        get_ptr = *(volatile uint32_t *)((uintptr_t)XBOX_HOST(dev + g_fence_mirrors[i].get_ptr_off));
++        if (fence_readable(get_ptr, 4))
++            *(volatile uint32_t *)((uintptr_t)XBOX_HOST(get_ptr)) = value;
++    }
++}
++
++static void fence_mirrors_tick(void)
++{
++    if (nv2a_async())
++        return;             /* the executor's semaphore releases own the fence */
++    for (int i = 0; i < g_fence_mirror_count; i++) {
++        uint32_t dev, get_ptr;
++
++        if (!fence_readable(g_fence_mirrors[i].device_ptr_va, 4))
++            continue;
 +        dev = *(volatile uint32_t *)((uintptr_t)XBOX_HOST(g_fence_mirrors[i].device_ptr_va));
          if (!fence_readable(dev + g_fence_mirrors[i].get_ptr_off, 4)
                  || !fence_readable(dev + g_fence_mirrors[i].put_off, 4))
@@ -7384,10 +8517,10 @@ index 72d5131..2ae386e 100644
  
      if (g_heap_block_count < XBOX_HEAP_MAX_BLOCKS) {
          g_heap_blocks[g_heap_block_count].addr = result;
-diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
+diff --git c/src/kernel/xbox_memory_layout.h w/src/kernel/xbox_memory_layout.h
 index 53f9d3d..f826168 100644
---- a/src/kernel/xbox_memory_layout.h
-+++ b/src/kernel/xbox_memory_layout.h
+--- c/src/kernel/xbox_memory_layout.h
++++ w/src/kernel/xbox_memory_layout.h
 @@ -211,6 +211,8 @@ void *xbox_GetMemoryBase(void);
   * Returns 0 if memory is mapped at original Xbox addresses (ideal case).
   */
@@ -7405,10 +8538,10 @@ index 53f9d3d..f826168 100644
 +uint32_t xbox_TickCountMs(void);
 +
  #endif /* XBOX_MEMORY_LAYOUT_H */
-diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 93288d5..77c6520 100644
---- a/src/platform/win32_compat.c
-+++ b/src/platform/win32_compat.c
+diff --git c/src/platform/win32_compat.c w/src/platform/win32_compat.c
+index 93288d5..6568214 100644
+--- c/src/platform/win32_compat.c
++++ w/src/platform/win32_compat.c
 @@ -35,8 +35,10 @@
  #include <mach/mach.h>
  #include <mach/mach_vm.h>
@@ -7420,7 +8553,26 @@ index 93288d5..77c6520 100644
  
  /* ===================================================================== */
  /* Last-error (thread-local)                                             */
-@@ -1271,7 +1273,23 @@ VOID OutputDebugStringA(LPCSTR str)
+@@ -377,6 +379,18 @@ const char *w32_handle_path(HANDLE h)
+     return (o && o->kind == K_FILE) ? o->file_path : NULL;
+ }
+ 
++void w32_handle_set_path(HANDLE h, const char *host_path)
++{
++    w32_object *o = (w32_object *)h;
++    char *old;
++
++    if (!o || o->kind != K_FILE)
++        return;
++    old = o->file_path;
++    o->file_path = host_path ? strdup(host_path) : NULL;
++    free(old);
++}
++
+ BOOL CloseHandle(HANDLE h)
+ {
+     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS ||
+@@ -1271,7 +1285,23 @@ VOID OutputDebugStringA(LPCSTR str)
      if (str) fputs(str, stderr);
  }
  
@@ -7444,7 +8596,7 @@ index 93288d5..77c6520 100644
  
  BOOL IsDebuggerPresent(void)
  {
-@@ -1456,7 +1474,11 @@ DWORD XInputGetState(DWORD idx, XINPUT_STATE *state)
+@@ -1456,7 +1486,11 @@ DWORD XInputGetState(DWORD idx, XINPUT_STATE *state)
  BOOL TerminateProcess(HANDLE process, UINT exitCode)
  {
      (void)process;
@@ -7456,7 +8608,7 @@ index 93288d5..77c6520 100644
  }
  
  VOID OutputDebugStringW(LPCWSTR str)
-@@ -1781,6 +1803,18 @@ BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX b)
+@@ -1781,6 +1815,18 @@ BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX b)
      b->ullAvailPhys     = avail;
      b->ullTotalPageFile = b->ullTotalPhys + (ULONGLONG)swap.xsu_total;
      b->ullAvailPageFile = b->ullAvailPhys + (ULONGLONG)swap.xsu_avail;
@@ -7475,11 +8627,20 @@ index 93288d5..77c6520 100644
  #else
      struct sysinfo si;
      if (sysinfo(&si) != 0) return FALSE;
-diff --git a/src/platform/win32_compat.h b/src/platform/win32_compat.h
-index 22762ee..4c1a32c 100644
---- a/src/platform/win32_compat.h
-+++ b/src/platform/win32_compat.h
-@@ -168,6 +168,7 @@ DWORD  GetCurrentProcessId(void);
+diff --git c/src/platform/win32_compat.h w/src/platform/win32_compat.h
+index 22762ee..113f9e9 100644
+--- c/src/platform/win32_compat.h
++++ w/src/platform/win32_compat.h
+@@ -127,6 +127,8 @@ BOOL  DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc,
+ HANDLE      w32_open_handle(int fd, const char *host_path);
+ int         w32_handle_fd(HANDLE h);
+ const char *w32_handle_path(HANDLE h);
++/* After a rename: later path-based operations on h follow the file. */
++void        w32_handle_set_path(HANDLE h, const char *host_path);
+ 
+ /* ---- Events ----------------------------------------------------------- */
+ HANDLE CreateEventA(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialState, LPCSTR name);
+@@ -168,6 +170,7 @@ DWORD  GetCurrentProcessId(void);
  BOOL   SetThreadPriority(HANDLE h, int priority);
  int    GetThreadPriority(HANDLE h);
  VOID   SwitchToThread(void);
@@ -7487,7 +8648,7 @@ index 22762ee..4c1a32c 100644
  DWORD  QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data);
  
  /* ---- Sleep ------------------------------------------------------------ */
-@@ -228,6 +229,7 @@ unsigned int _clearfp(void);   /* clear pending FPU exception flags */
+@@ -228,6 +231,7 @@ unsigned int _clearfp(void);   /* clear pending FPU exception flags */
  
  /* MSVC stack alloca alias. <alloca.h> provides the underlying function. */
  #include <alloca.h>
@@ -7495,7 +8656,7 @@ index 22762ee..4c1a32c 100644
  #define _alloca(n) alloca(n)
  
  /* ---- Win32 file API (POSIX-backed) ----------------------------------- */
-@@ -438,7 +440,7 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+@@ -438,7 +442,7 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
   * 
   * Note: GCC needs correct struct. This is from nxdk
   * */
@@ -7504,10 +8665,10 @@ index 22762ee..4c1a32c 100644
  typedef struct _EXCEPTION_POINTERS
  {
      PEXCEPTION_RECORD ExceptionRecord;
-diff --git a/src/usb/ohci.c b/src/usb/ohci.c
+diff --git c/src/usb/ohci.c w/src/usb/ohci.c
 index 641a94d..63bec1f 100644
---- a/src/usb/ohci.c
-+++ b/src/usb/ohci.c
+--- c/src/usb/ohci.c
++++ w/src/usb/ohci.c
 @@ -7,6 +7,7 @@
   * that decides how the rest gets built.
   */
@@ -7682,10 +8843,10 @@ index 641a94d..63bec1f 100644
  int xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va)
  {
  #if defined(_WIN32)
-diff --git a/src/usb/ohci.h b/src/usb/ohci.h
+diff --git c/src/usb/ohci.h w/src/usb/ohci.h
 index 94ff7b2..2a01b28 100644
---- a/src/usb/ohci.h
-+++ b/src/usb/ohci.h
+--- c/src/usb/ohci.h
++++ w/src/usb/ohci.h
 @@ -40,6 +40,7 @@ int  xbox_OhciOwnsAddress(uint32_t xbox_va);
  /* Service a trapped access. Returns 1 if the faulting instruction was decoded
   * and stepped over. `ctx` is a PCONTEXT; void * keeps windows.h out of here. */
@@ -7694,10 +8855,10 @@ index 94ff7b2..2a01b28 100644
  
  /* Report counts at exit, so a run says whether the driver ever looked. */
  void xbox_OhciReport(void);
-diff --git a/src/usb/usb_gamepad.c b/src/usb/usb_gamepad.c
+diff --git c/src/usb/usb_gamepad.c w/src/usb/usb_gamepad.c
 index bd00f3f..8a4137a 100644
---- a/src/usb/usb_gamepad.c
-+++ b/src/usb/usb_gamepad.c
+--- c/src/usb/usb_gamepad.c
++++ w/src/usb/usb_gamepad.c
 @@ -442,6 +442,55 @@ static void pad_script_compact(unsigned long t)
      s_script_len = n;
  }
@@ -7798,10 +8959,10 @@ index bd00f3f..8a4137a 100644
                  npending = 0;
              }
          } else if (npending < sizeof pending - 1) {
-diff --git a/src/usb/usb_gamepad.h b/src/usb/usb_gamepad.h
+diff --git c/src/usb/usb_gamepad.h w/src/usb/usb_gamepad.h
 index 18291d7..e0e9f01 100644
---- a/src/usb/usb_gamepad.h
-+++ b/src/usb/usb_gamepad.h
+--- c/src/usb/usb_gamepad.h
++++ w/src/usb/usb_gamepad.h
 @@ -41,6 +41,11 @@ int usb_gamepad_report(int pad, uint8_t *out, int max);
  uint8_t usb_gamepad_address(int pad);
  int usb_gamepad_configured(int pad);
@@ -7814,10 +8975,10 @@ index 18291d7..e0e9f01 100644
  /* Up to four pads, one per Xbox controller port. Pad n is driven by host
   * XInput pad n and by pad-script steps prefixed "p<n+1>-". */
  #define USB_GAMEPAD_MAX 4
-diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
+diff --git c/src/video/CMakeLists.txt w/src/video/CMakeLists.txt
 index 2189a3b..4b8e73a 100644
---- a/src/video/CMakeLists.txt
-+++ b/src/video/CMakeLists.txt
+--- c/src/video/CMakeLists.txt
++++ w/src/video/CMakeLists.txt
 @@ -3,12 +3,19 @@ add_library(xbox_video STATIC
      video_player.c
      video_pump.c
@@ -7839,11 +9000,11 @@ index 2189a3b..4b8e73a 100644
 -    target_link_libraries(xbox_video PUBLIC mfplat mfreadwrite mfuuid mf ole32)
 +    target_link_libraries(xbox_video PUBLIC mfplat mfreadwrite mfuuid mf ole32 d3d11 dxgi)
  endif()
-diff --git a/src/video/fb_gamma.c b/src/video/fb_gamma.c
+diff --git c/src/video/fb_gamma.c w/src/video/fb_gamma.c
 new file mode 100644
 index 0000000..165eab0
 --- /dev/null
-+++ b/src/video/fb_gamma.c
++++ w/src/video/fb_gamma.c
 @@ -0,0 +1,76 @@
 +/* The display's gamma ramp.
 + *
@@ -7921,10 +9082,10 @@ index 0000000..165eab0
 +{
 +    return s_lut_serial;
 +}
-diff --git a/src/video/fb_present.c b/src/video/fb_present.c
+diff --git c/src/video/fb_present.c w/src/video/fb_present.c
 index 08bae4b..f12235a 100644
---- a/src/video/fb_present.c
-+++ b/src/video/fb_present.c
+--- c/src/video/fb_present.c
++++ w/src/video/fb_present.c
 @@ -15,12 +15,15 @@
   * Off unless RECOMP_FB_WINDOW is set.
   */
@@ -8750,12 +9911,12 @@ index 08bae4b..f12235a 100644
 -void xbox_FramebufferWindowSetTitle(const uint16_t *n, int m) { (void)n; (void)m; }
 -void xbox_FramebufferWindowFrameStats(uint32_t draws) { (void)draws; }
  #endif
-diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
+diff --git c/src/video/fb_present_sdl.c w/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..e87eca6
+index 0000000..d5f3e1a
 --- /dev/null
-+++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,491 @@
++++ w/src/video/fb_present_sdl.c
+@@ -0,0 +1,493 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -9033,6 +10194,8 @@ index 0000000..e87eca6
 +/* RECOMP_SNAP_TRIGGER=<file>: when it appears, dump the shown frame to the BMP
 + * path it contains and delete it. hi: the GPU backend's full-resolution frame
 + * when that is what the window shows (s_rgb is not updated then). */
++void xbox_FramebufferSnapshot(const char *path);
++
 +static void snap_trigger_poll(const uint32_t *hi, uint32_t hi_w, uint32_t hi_h)
 +{
 +    (void)hi; (void)hi_w; (void)hi_h;   /* the published frame (s_hi) is used */
@@ -9247,11 +10410,11 @@ index 0000000..e87eca6
 +        s_fb_running = 0;
 +}
 +#endif /* !_WIN32 */
-diff --git a/src/video/fb_present_web.c b/src/video/fb_present_web.c
+diff --git c/src/video/fb_present_web.c w/src/video/fb_present_web.c
 new file mode 100644
 index 0000000..4f2e829
 --- /dev/null
-+++ b/src/video/fb_present_web.c
++++ w/src/video/fb_present_web.c
 @@ -0,0 +1,273 @@
 +/**
 + * Browser counterpart of fb_present_sdl.c: the guest framebuffer for a page.
@@ -9526,11 +10689,11 @@ index 0000000..4f2e829
 +            s_fb_width, s_fb_height);
 +}
 +#endif /* __EMSCRIPTEN__ */
-diff --git a/src/video/gpu_present.c b/src/video/gpu_present.c
+diff --git c/src/video/gpu_present.c w/src/video/gpu_present.c
 new file mode 100644
 index 0000000..7b3408b
 --- /dev/null
-+++ b/src/video/gpu_present.c
++++ w/src/video/gpu_present.c
 @@ -0,0 +1,381 @@
 +/*
 + * D3D11 presentation for the framebuffer window (ROADMAP Phase 2.1).
@@ -9913,11 +11076,11 @@ index 0000000..7b3408b
 +    return s_rtv != NULL;
 +}
 +#endif
-diff --git a/src/video/gpu_present.h b/src/video/gpu_present.h
+diff --git c/src/video/gpu_present.h w/src/video/gpu_present.h
 new file mode 100644
 index 0000000..8891786
 --- /dev/null
-+++ b/src/video/gpu_present.h
++++ w/src/video/gpu_present.h
 @@ -0,0 +1,17 @@
 +/* D3D11 presentation for the framebuffer window (see gpu_present.c). */
 +#ifndef XBOX_GPU_PRESENT_H
@@ -9936,10 +11099,10 @@ index 0000000..8891786
 +void gpu_present_shutdown(void);
 +#endif
 +#endif
-diff --git a/src/video/video_player.h b/src/video/video_player.h
+diff --git c/src/video/video_player.h w/src/video/video_player.h
 index c844aef..bc4d39c 100644
---- a/src/video/video_player.h
-+++ b/src/video/video_player.h
+--- c/src/video/video_player.h
++++ w/src/video/video_player.h
 @@ -62,13 +62,26 @@ int  video_dump_frame_bmp(const char *path);
   * zero when there is no window, which is the right answer: with nothing to
   * focus there is nothing to type into. */
@@ -9967,10 +11130,10 @@ index c844aef..bc4d39c 100644
 +void xbox_FramebufferSetGammaRamp(const uint8_t *r, const uint8_t *g, const uint8_t *b);
  
  #endif /* BURNOUT3_VIDEO_PLAYER_H */
-diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
+diff --git c/templates/runtime/recomp_types.h w/templates/runtime/recomp_types.h
 index 8e9325e..e2089b0 100644
---- a/templates/runtime/recomp_types.h
-+++ b/templates/runtime/recomp_types.h
+--- c/templates/runtime/recomp_types.h
++++ w/templates/runtime/recomp_types.h
 @@ -410,6 +410,56 @@ void recomp_trace_esp(const char *name, const char *tag);
   * uintptr_t cast preserves the overflow bits, landing us 4GB+ past
   * our mapping and causing access violations.
@@ -10089,10 +11252,1276 @@ index 8e9325e..e2089b0 100644
  /* ================================================================
   * Register name aliases for generated code
   *
-diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
+diff --git c/tests/kernel_eeprom_settings/CMakeLists.txt w/tests/kernel_eeprom_settings/CMakeLists.txt
+new file mode 100644
+index 0000000..42f6fa3
+--- /dev/null
++++ w/tests/kernel_eeprom_settings/CMakeLists.txt
+@@ -0,0 +1,9 @@
++cmake_minimum_required(VERSION 3.20)
++project(kernel_eeprom_settings_test C)
++set(CMAKE_C_STANDARD 11)
++add_subdirectory(../.. runtime)
++add_executable(kernel_eeprom_settings_test test_main.c)
++target_include_directories(kernel_eeprom_settings_test PRIVATE ../../src/kernel)
++target_link_libraries(kernel_eeprom_settings_test PRIVATE xboxrecomp)
++enable_testing()
++add_test(NAME kernel_eeprom_settings_test COMMAND kernel_eeprom_settings_test)
+diff --git c/tests/kernel_eeprom_settings/test_main.c w/tests/kernel_eeprom_settings/test_main.c
+new file mode 100644
+index 0000000..e9d2195
+--- /dev/null
++++ w/tests/kernel_eeprom_settings/test_main.c
+@@ -0,0 +1,90 @@
++/* The EEPROM user settings: the time zone is the host's, and XC_MAX_OS --
++ * the whole block, which XAPI reads in one query -- agrees with the single
++ * queries. */
++#include "kernel.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++/* This settings-only test must never dispatch guest code. */
++void *recomp_lookup(ULONG address) { (void)address; abort(); }
++void *recomp_lookup_manual(ULONG address) { (void)address; abort(); }
++
++static LONG host_bias(void)
++{
++#ifdef _WIN32
++    TIME_ZONE_INFORMATION tzi;
++    memset(&tzi, 0, sizeof tzi);
++    GetTimeZoneInformation(&tzi);
++    return tzi.Bias;
++#else
++    time_t now = time(NULL);
++    struct tm lt;
++    tzset();
++    localtime_r(&now, &lt);
++    return (LONG)(-lt.tm_gmtoff / 60);
++#endif
++}
++
++static ULONG query(ULONG index)
++{
++    ULONG v = 0xdeadbeef, type = 0, len = 0;
++    xbox_ExQueryNonVolatileSetting(index, &type, &v, sizeof v, &len);
++    return v;
++}
++
++int main(void)
++{
++    uint8_t blk[256];
++    ULONG type = 0, len = 0, v;
++    LONG bias = (LONG)query(XC_TIMEZONE_BIAS);
++    size_t i;
++
++    if (bias != host_bias()) {
++        fprintf(stderr, "FAIL: XC_TIMEZONE_BIAS %ld, host bias %ld\n", (long)bias, (long)host_bias());
++        return 1;
++    }
++    memset(blk, 0xCC, sizeof blk);
++    if (xbox_ExQueryNonVolatileSetting(XC_MAX_OS, &type, blk, sizeof blk, &len)
++        || type != 3 || len != 0x60) {
++        fprintf(stderr, "FAIL: XC_MAX_OS type %lu length %lu\n", (unsigned long)type, (unsigned long)len);
++        return 1;
++    }
++    memcpy(&v, blk + 0x04, 4);
++    if ((LONG)v != bias) {
++        fprintf(stderr, "FAIL: block bias %ld, single query %ld\n", (long)(LONG)v, (long)bias);
++        return 1;
++    }
++    {
++        static const struct { ULONG index, off; } f[] = {
++            {XC_TZ_STD_BIAS, 0x28}, {XC_TZ_DLT_BIAS, 0x2C}, {XC_LANGUAGE, 0x30},
++            {XC_VIDEO, 0x34}, {XC_AUDIO, 0x38}, {XC_MISC, 0x58}, {XC_DVD_REGION, 0x5C},
++        };
++        for (i = 0; i < sizeof f / sizeof f[0]; i++) {
++            memcpy(&v, blk + f[i].off, 4);
++            if (v != query(f[i].index)) {
++                fprintf(stderr, "FAIL: index 0x%02lX: block 0x%lX at +0x%02lX, query 0x%lX\n",
++                        (unsigned long)f[i].index, (unsigned long)v, (unsigned long)f[i].off,
++                        (unsigned long)query(f[i].index));
++                return 1;
++            }
++        }
++    }
++    {
++        uint8_t small[4];
++        len = 0;
++        if (xbox_ExQueryNonVolatileSetting(XC_MAX_OS, &type, small, sizeof small, &len)
++                != (NTSTATUS)0xC0000023L || len != 0x60) {
++            fprintf(stderr, "FAIL: XC_MAX_OS into 4 bytes: want BUFFER_TOO_SMALL and 0x60\n");
++            return 1;
++        }
++    }
++    for (i = 0x60; i < sizeof blk; i++)
++        if (blk[i]) {
++            fprintf(stderr, "FAIL: byte 0x%02X past the block is 0x%02X\n", (unsigned)i, blk[i]);
++            return 1;
++        }
++    printf("PASS: time zone bias %ld (host), XC_MAX_OS block matches the single queries.\n",
++           (long)bias);
++    return 0;
++}
+diff --git c/tests/kernel_fatx_overwrite/CMakeLists.txt w/tests/kernel_fatx_overwrite/CMakeLists.txt
+new file mode 100644
+index 0000000..50c2912
+--- /dev/null
++++ w/tests/kernel_fatx_overwrite/CMakeLists.txt
+@@ -0,0 +1,11 @@
++cmake_minimum_required(VERSION 3.20)
++project(kernel_fatx_overwrite_test C)
++# Cross-platform: the xbox_Nt* file functions called directly, so it covers
++# the Win32 backend on Windows/Proton and the POSIX one elsewhere.
++set(CMAKE_C_STANDARD 11)
++add_subdirectory(../.. runtime)
++add_executable(kernel_fatx_overwrite_test test_main.c)
++target_include_directories(kernel_fatx_overwrite_test PRIVATE ../../src/kernel)
++target_link_libraries(kernel_fatx_overwrite_test PRIVATE xboxrecomp)
++enable_testing()
++add_test(NAME kernel_fatx_overwrite_test COMMAND kernel_fatx_overwrite_test)
+diff --git c/tests/kernel_fatx_overwrite/test_main.c w/tests/kernel_fatx_overwrite/test_main.c
+new file mode 100644
+index 0000000..f2ad34e
+--- /dev/null
++++ w/tests/kernel_fatx_overwrite/test_main.c
+@@ -0,0 +1,437 @@
++/*
++ * FATX overwrite: regrowing after an overwrite keeps the data.
++ *
++ * A title can build its z: texture cache as:
++ *
++ *   NtCreateFile(x.tmp, FILE_OVERWRITE_IF, opts 0x48)   no buffering
++ *   set end of file (size rounded up to 512); write all of it; close
++ *   NtCreateFile(x.tmp, FILE_OVERWRITE_IF, opts 0x60)
++ *   query position; set end of file (true size); rename to x.dat; close
++ *
++ * FATX keeps no valid-data length, so the second open's trim exposes the
++ * bytes already on disk. The host truncate (O_TRUNC, CREATE_ALWAYS) zero-
++ * fills instead, and every cache file came out as zeros of the right length
++ * (seen on Proton: a 1 MB cache file that was all zeros).
++ *
++ * Cross-platform: it calls the xbox_Nt* file functions directly, which are
++ * the Win32 backend on Windows (and Proton) and the POSIX one elsewhere.
++ */
++#include "kernel.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#if !defined(_WIN32)
++#include <unistd.h>
++#include <sys/stat.h>
++#endif
++
++/* Provided by the generated title; nothing here calls a guest function. */
++typedef void (*recomp_func_t)(void);
++recomp_func_t recomp_lookup(uint32_t xbox_va);
++recomp_func_t recomp_lookup(uint32_t xbox_va) { (void)xbox_va; return NULL; }
++recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
++recomp_func_t recomp_lookup_manual(uint32_t xbox_va) { (void)xbox_va; return NULL; }
++
++#define SEP_S "/"
++#if defined(_WIN32)
++#undef SEP_S
++#define SEP_S "\\"
++#endif
++
++static int failures;
++static char g_cache[512];
++
++static void check(int ok, const char *what, const char *detail)
++{
++    printf("  %-60s %s", what, ok ? "PASS" : "FAIL");
++    if (!ok && detail) printf(" -- %s", detail);
++    putchar('\n');
++    if (!ok) failures++;
++}
++
++static NTSTATUS open_file(const char *path, ULONG disposition, ULONG options,
++                          HANDLE *out)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    XBOX_IO_STATUS_BLOCK ios;
++
++    name.Length = (USHORT)strlen(path);
++    name.MaximumLength = (USHORT)(name.Length + 1);
++    name.Buffer = (PCHAR)path;
++    oa.RootDirectory = NULL;
++    oa.ObjectName = &name;
++    oa.Attributes = 0x40;
++    *out = NULL;
++    return xbox_NtCreateFile(out, 0xC0110000u /* R|W|DELETE|SYNC */, &oa, &ios,
++                             NULL, 0x80, 0, disposition, options);
++}
++
++static NTSTATUS set_eof(HANDLE h, LONGLONG size)
++{
++    XBOX_FILE_END_OF_FILE_INFORMATION info;
++    XBOX_IO_STATUS_BLOCK ios;
++    info.EndOfFile.QuadPart = size;
++    return xbox_NtSetInformationFile(h, &ios, &info, sizeof info,
++                                     XboxFileEndOfFileInformation);
++}
++
++static NTSTATUS query_pos(HANDLE h)
++{
++    XBOX_FILE_POSITION_INFORMATION info;
++    XBOX_IO_STATUS_BLOCK ios;
++    return xbox_NtQueryInformationFile(h, &ios, &info, sizeof info,
++                                       XboxFilePositionInformation);
++}
++
++static LONGLONG query_size(HANDLE h)
++{
++    XBOX_FILE_STANDARD_INFORMATION info;
++    XBOX_IO_STATUS_BLOCK ios;
++    if (xbox_NtQueryInformationFile(h, &ios, &info, sizeof info,
++                                    XboxFileStandardInformation) != 0)
++        return -1;
++    return info.EndOfFile.QuadPart;
++}
++
++static NTSTATUS write_at(HANDLE h, const void *buf, ULONG len, LONGLONG off)
++{
++    XBOX_IO_STATUS_BLOCK ios;
++    LARGE_INTEGER o;
++    o.QuadPart = off;
++    return xbox_NtWriteFile(h, NULL, NULL, NULL, &ios, (PVOID)buf, len, &o);
++}
++
++static NTSTATUS rename_to(HANDLE h, const char *path)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    name.Length = (USHORT)strlen(path);
++    name.MaximumLength = (USHORT)(name.Length + 1);
++    name.Buffer = (PCHAR)path;
++    oa.RootDirectory = NULL;
++    oa.ObjectName = &name;
++    oa.Attributes = 0x40;
++    return xbox_RenameFileByHandle(h, &oa, TRUE);
++}
++
++/* Host-side read of <cache>/<name>; -1 if it does not exist. */
++static long host_file(const char *name, unsigned char *buf, size_t cap)
++{
++    char p[700];
++    FILE *f;
++    long n;
++    snprintf(p, sizeof p, "%s" SEP_S "%s", g_cache, name);
++    f = fopen(p, "rb");
++    if (!f) return -1;
++    n = (long)fread(buf, 1, cap, f);
++    fclose(f);
++    return n;
++}
++
++static unsigned char pattern(unsigned i) { return (unsigned char)(i * 7 + 1); }
++
++static void set_env(const char *k, const char *v)
++{
++#if defined(_WIN32)
++    _putenv_s(k, v ? v : "");
++#else
++    if (v) setenv(k, v, 1); else unsetenv(k);
++#endif
++}
++
++static void make_dir(const char *p)
++{
++#if defined(_WIN32)
++    CreateDirectoryA(p, NULL);
++#else
++    mkdir(p, 0755);
++#endif
++}
++
++static int is_dir(const char *p)
++{
++#if defined(_WIN32)
++    DWORD a = GetFileAttributesA(p);
++    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
++#else
++    struct stat st;
++    return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
++#endif
++}
++
++/* Translate a guest path and compare it with <want>. */
++static void check_maps(const char *guest, const char *want, const char *what)
++{
++    xbox_host_char host[MAX_PATH];
++    char got[MAX_PATH * 2], d[MAX_PATH * 2 + 32];
++    int ok = xbox_translate_path(guest, host, MAX_PATH);
++#if defined(_WIN32)
++    if (ok) WideCharToMultiByte(CP_UTF8, 0, host, -1, got, sizeof got, NULL, NULL);
++#else
++    if (ok) snprintf(got, sizeof got, "%s", host);
++#endif
++    if (!ok) snprintf(got, sizeof got, "(not translated)");
++    {   /* the join can double a separator; the host APIs don't mind */
++        char *r = got, *w = got;
++        for (; *r; r++)
++            if (!((*r == '/' || *r == '\\') && w > got && w[-1] == *r)) *w++ = *r;
++        *w = 0;
++    }
++    snprintf(d, sizeof d, "got %s", got);
++    check(ok && strcmp(got, want) == 0, what, d);
++}
++
++/* A search abandoned after one result must not outlive its handle.
++ *
++ * A title that looks for one save (FindFirstFile, then FindClose without
++ * reading on) leaves its enumeration part-way. Host handle values are reused,
++ * so a later directory opened at the same value carried the old search on:
++ * its first answer was the old directory's next entry, or "no more files",
++ * and with no reuse the table of searches filled up. */
++#define DIRS 8
++#define SEARCHES 300
++
++static NTSTATUS open_dir(const char *path, HANDLE *out)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    XBOX_IO_STATUS_BLOCK ios;
++
++    name.Length = (USHORT)strlen(path);
++    name.MaximumLength = (USHORT)(name.Length + 1);
++    name.Buffer = (PCHAR)path;
++    oa.RootDirectory = NULL;
++    oa.ObjectName = &name;
++    oa.Attributes = 0x40;
++    *out = NULL;
++    /* what XAPI's FindFirstFile asks for: list, synchronous, shared */
++    return xbox_NtCreateFile(out, 0x00100001u, &oa, &ios, NULL, 0, 3,
++                             XBOX_FILE_OPEN, 0x21);
++}
++
++static void test_dir_search(void)
++{
++    static ULONG info[128];
++    PXBOX_FILE_DIRECTORY_INFORMATION e = (PXBOX_FILE_DIRECTORY_INFORMATION)info;
++    char p[700], guest[32], want[8], pat[8], d[160], first_bad[96] = "";
++    unsigned i, k, fresh = 0, reused = 0;
++    HANDLE h, prev = NULL;
++
++    printf("\nDirectory searches closed after one result\n");
++    for (k = 0; k < DIRS; k++) {
++        FILE *f;
++        snprintf(p, sizeof p, "%s" SEP_S "d%u", g_cache, k);
++        make_dir(p);
++        for (i = 0; i < 2; i++) {   /* two entries: one result leaves it open */
++            snprintf(p, sizeof p, "%s" SEP_S "d%u" SEP_S "e%u%c.txt", g_cache, k, k, 'a' + i);
++            if ((f = fopen(p, "wb")) != NULL) fclose(f);
++        }
++    }
++
++    for (i = 0; i < SEARCHES; i++) {
++        XBOX_ANSI_STRING mask;
++        XBOX_IO_STATUS_BLOCK ios;
++        NTSTATUS st;
++        int ok;
++
++        k = i % DIRS;
++        snprintf(guest, sizeof guest, "z:\\d%u", k);
++        snprintf(want, sizeof want, "e%u", k);
++        snprintf(pat, sizeof pat, "e%u*", k);
++        if (open_dir(guest, &h) != 0 || !h) {
++            snprintf(first_bad, sizeof first_bad, "search %u: open %s failed", i, guest);
++            break;
++        }
++        if (h == prev) reused++;
++        prev = h;
++        mask.Length = (USHORT)strlen(pat);
++        mask.MaximumLength = (USHORT)(mask.Length + 1);
++        mask.Buffer = pat;
++        memset(info, 0, sizeof info);
++        st = xbox_NtQueryDirectoryFile(h, NULL, NULL, NULL, &ios, e, sizeof info,
++                                       XboxFileDirectoryInformation, &mask, FALSE);
++        ok = st == 0 && e->FileNameLength >= 2 && memcmp(e->FileName, want, 2) == 0;
++        if (ok) fresh++;
++        else if (!first_bad[0])
++            snprintf(first_bad, sizeof first_bad, "search %u in d%u: status 0x%08X, \"%.*s\"",
++                     i, k, (unsigned)st, (int)(e->FileNameLength < 16 ? e->FileNameLength : 16),
++                     e->FileName);
++        xbox_NtClose(h);
++    }
++    snprintf(d, sizeof d, "%u/%u fresh, handle reused %u times; first stale: %s",
++             fresh, SEARCHES, reused, first_bad[0] ? first_bad : "none");
++    printf("  (%s)\n", d);
++    check(fresh == SEARCHES, "each new search starts in its own directory", d);
++}
++
++/* Where Partition1's UDATA and TDATA go: RECOMP_SAVE_DIR, the save dir, or
++ * the game dir when saves are only there. */
++static void test_save_dir(const char *root)
++{
++    char game[600], save[600], ov[600], p[700], want[700];
++
++    printf("\nSave directories\n");
++    snprintf(game, sizeof game, "%s" SEP_S "g", root);
++    snprintf(save, sizeof save, "%s" SEP_S "s", root);
++    snprintf(ov, sizeof ov, "%s" SEP_S "ov", root);
++    make_dir(game);
++    make_dir(save);
++
++    set_env("RECOMP_SAVE_DIR", ov);
++    xbox_path_init(game, save);
++    check(is_dir(ov), "RECOMP_SAVE_DIR is created", ov);
++    snprintf(want, sizeof want, "%s" SEP_S "UDATA" SEP_S "x", ov);
++    check_maps("\\Device\\Harddisk0\\Partition1\\UDATA\\x", want,
++               "UDATA\\x goes under RECOMP_SAVE_DIR");
++
++    set_env("RECOMP_SAVE_DIR", NULL);
++    snprintf(p, sizeof p, "%s" SEP_S "TDATA", game);
++    make_dir(p);                   /* saves only in the game dir */
++    xbox_path_init(game, save);
++    snprintf(want, sizeof want, "%s" SEP_S "UDATA" SEP_S "x", save);
++    check_maps("\\Device\\Harddisk0\\Partition1\\UDATA\\x", want,
++               "unset: UDATA\\x goes under the save dir");
++    snprintf(want, sizeof want, "%s" SEP_S "TDATA" SEP_S "y", game);
++    check_maps("\\Device\\Harddisk0\\Partition1\\TDATA\\y", want,
++               "TDATA only in the game dir stays there");
++    snprintf(want, sizeof want, "%s" SEP_S "UDATAx" SEP_S "z", game);
++    check_maps("\\Device\\Harddisk0\\Partition1\\UDATAx\\z", want,
++               "UDATAx is not UDATA");
++}
++
++int main(int argc, char **argv)
++{
++    static unsigned char got[8192];
++    unsigned char *buf;
++    char root[512], d[160];
++    HANDLE h;
++    NTSTATUS st;
++    long n;
++    unsigned i;
++    int same;
++
++    /* argv[1]: write the report there (Proton drops a console exe's stdout) */
++    if (argc > 1 && !freopen(argv[1], "w", stdout)) return 2;
++    setvbuf(stdout, NULL, _IONBF, 0);
++#if defined(_WIN32)
++    {
++        char tmp[MAX_PATH];
++        GetTempPathA(MAX_PATH, tmp);
++        snprintf(root, sizeof root, "%sfatxow-%lu", tmp,
++                 (unsigned long)GetCurrentProcessId());
++        if (!CreateDirectoryA(root, NULL)) return 2;
++        snprintf(g_cache, sizeof g_cache, "%s\\Cache", root);
++        CreateDirectoryA(g_cache, NULL);
++        /* unbuffered I/O wants a sector-aligned buffer */
++        buf = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++    }
++#else
++    {
++        char tmpl[] = "/tmp/fatxowXXXXXX";
++        if (!mkdtemp(tmpl)) return 2;
++        snprintf(root, sizeof root, "%s", tmpl);
++        snprintf(g_cache, sizeof g_cache, "%s/Cache", root);
++        mkdir(g_cache, 0755);
++        if (posix_memalign((void **)&buf, 4096, 4096) != 0) buf = NULL;
++    }
++#endif
++    if (!buf) return 2;
++    xbox_path_init(root, root);
++    for (i = 0; i < 4096; i++) buf[i] = pattern(i);
++    memcpy(buf, "IPK1", 4);
++
++    /* First, so the overwrite and rename checks below run on handle values
++     * that directory searches have used and closed. */
++    test_dir_search();
++
++    printf("\nFATX overwrite (the texture-cache copy)\n");
++
++    /* First pass: create, size, write unbuffered, close. */
++    st = open_file("z:\\o.tmp", XBOX_FILE_OVERWRITE_IF, 0x48, &h);
++    snprintf(d, sizeof d, "status 0x%08X", (unsigned)st);
++    check(st == 0 && h, "create z:\\o.tmp (OVERWRITE_IF, no buffering)", d);
++    if (st) goto done;
++    check(set_eof(h, 4096) == 0, "set end of file to 4096", NULL);
++    st = write_at(h, buf, 4096, 0);
++    snprintf(d, sizeof d, "status 0x%08X", (unsigned)st);
++    check(st == 0, "write 4096 bytes starting \"IPK1\"", d);
++    xbox_NtClose(h);
++    check(host_file("o.tmp", got, sizeof got) == 4096, "host file is 4096 bytes", NULL);
++
++    /* Second pass: overwrite, position query, trim, rename, close. */
++    st = open_file("z:\\o.tmp", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    check(st == 0 && h, "reopen with OVERWRITE_IF", NULL);
++    check(query_pos(h) == 0, "position query (XAPI SetEndOfFile does one)", NULL);
++    check(set_eof(h, 3000) == 0, "set end of file to the true size, 3000", NULL);
++    st = rename_to(h, "z:\\o.dat");
++    snprintf(d, sizeof d, "status 0x%08X", (unsigned)st);
++    check(st == 0, "rename to z:\\o.dat", d);
++    xbox_NtClose(h);
++    n = host_file("o.dat", got, sizeof got);
++    same = n == 3000;
++    for (i = 0; same && i < 3000; i++)
++        if (got[i] != (i < 4 ? (unsigned char)"IPK1"[i] : pattern(i))) same = 0;
++    snprintf(d, sizeof d, "%ld bytes, first 0x%02X", n, n > 0 ? got[0] : 0);
++    check(n == 3000, "o.dat is 3000 bytes", d);
++    check(same, "the bytes below the new end survive", d);
++    check(host_file("o.tmp", got, sizeof got) < 0, "o.tmp is gone", NULL);
++
++    /* An overwrite followed by a write is a plain truncate. */
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    check(st == 0, "overwrite o.dat again", NULL);
++    write_at(h, buf, 4, 0);
++    xbox_NtClose(h);
++    check(host_file("o.dat", got, sizeof got) == 4,
++          "overwrite + 4-byte write leaves 4 bytes", NULL);
++
++    /* A size query sees the overwrite. */
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE, 0x60, &h);
++    check(st == 0, "FILE_OVERWRITE of an existing file opens", NULL);
++    snprintf(d, sizeof d, "size %lld", (long long)query_size(h));
++    check(query_size(h) == 0, "overwrite + size query reports 0", d);
++    xbox_NtClose(h);
++
++    /* An overwrite that is just closed leaves an empty file. */
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    write_at(h, buf, 16, 0);
++    xbox_NtClose(h);
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    xbox_NtClose(h);
++    check(host_file("o.dat", got, sizeof got) == 0,
++          "overwrite + close leaves 0 bytes", NULL);
++
++    /* An overwrite that regrows past the old end zero-fills only the tail. */
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    write_at(h, buf, 100, 0);
++    xbox_NtClose(h);
++    st = open_file("z:\\o.dat", XBOX_FILE_OVERWRITE_IF, 0x60, &h);
++    set_eof(h, 200);
++    xbox_NtClose(h);
++    n = host_file("o.dat", got, sizeof got);
++    same = n == 200;
++    for (i = 0; same && i < 200; i++)
++        if (got[i] != (i < 4 ? (unsigned char)"IPK1"[i] : i < 100 ? pattern(i) : 0))
++            same = 0;
++    check(same, "regrow past the old end: old bytes, then zeros", NULL);
++
++    /* FILE_OVERWRITE of a missing file still fails. */
++    st = open_file("z:\\missing.dat", XBOX_FILE_OVERWRITE, 0x60, &h);
++    check(st != 0, "FILE_OVERWRITE of a missing file fails", NULL);
++
++    test_save_dir(root);
++
++done:
++    {
++        char cmd[700];
++#if defined(_WIN32)
++        snprintf(cmd, sizeof cmd, "cmd /c rmdir /s /q \"%s\"", root);
++#else
++        snprintf(cmd, sizeof cmd, "rm -rf '%s'", root);
++#endif
++        (void)system(cmd);
++    }
++    printf("\n%d failure(s)\n", failures);
++    return failures ? 1 : 0;
++}
+diff --git c/tests/kernel_file_relative/CMakeLists.txt w/tests/kernel_file_relative/CMakeLists.txt
+new file mode 100644
+index 0000000..25d7224
+--- /dev/null
++++ w/tests/kernel_file_relative/CMakeLists.txt
+@@ -0,0 +1,11 @@
++cmake_minimum_required(VERSION 3.20)
++project(kernel_file_relative_test C)
++# Cross-platform: xbox_NtCreateFile and friends called directly, so it covers
++# the Win32 backend on Windows/Proton and the POSIX one elsewhere.
++set(CMAKE_C_STANDARD 11)
++add_subdirectory(../.. runtime)
++add_executable(kernel_file_relative_test test_main.c)
++target_include_directories(kernel_file_relative_test PRIVATE ../../src/kernel)
++target_link_libraries(kernel_file_relative_test PRIVATE xboxrecomp)
++enable_testing()
++add_test(NAME kernel_file_relative_test COMMAND kernel_file_relative_test)
+diff --git c/tests/kernel_file_relative/test_main.c w/tests/kernel_file_relative/test_main.c
+new file mode 100644
+index 0000000..20648a5
+--- /dev/null
++++ w/tests/kernel_file_relative/test_main.c
+@@ -0,0 +1,150 @@
++/*
++ * Opens relative to a RootDirectory handle, on every host.
++ *
++ * NT resolves an OBJECT_ATTRIBUTES name that is not a full path against its
++ * RootDirectory handle, and XAPI relies on it: the save-game code opens the
++ * save directory, then each file in it by its bare name ("Data.ssx").
++ * The Win32 backend joined such names to the directory handle's path; the
++ * POSIX backend sent the bare name through the path table, which matched no
++ * rule, and the open failed with STATUS_OBJECT_PATH_NOT_FOUND -- SSX 3 on
++ * Linux said "Unable to save" when overwriting a save.
++ *
++ * Covers NtCreateFile (create and reopen), NtQueryFullAttributesFile and
++ * NtDeleteFile with a RootDirectory, and that full paths still ignore it.
++ *
++ * Cross-platform: Win32 backend on Windows and Proton, POSIX elsewhere.
++ */
++#include "kernel.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#if !defined(_WIN32)
++#include <unistd.h>
++#include <sys/stat.h>
++#endif
++
++/* Provided by the generated title; nothing here calls a guest function. */
++typedef void (*recomp_func_t)(void);
++recomp_func_t recomp_lookup(uint32_t xbox_va);
++recomp_func_t recomp_lookup(uint32_t xbox_va) { (void)xbox_va; return NULL; }
++recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
++recomp_func_t recomp_lookup_manual(uint32_t xbox_va) { (void)xbox_va; return NULL; }
++
++static int failures;
++
++static void check(int ok, const char *what, unsigned got)
++{
++    printf("  %-62s %s", what, ok ? "PASS" : "FAIL");
++    if (!ok) printf(" -- got 0x%08X", got);
++    putchar('\n');
++    if (!ok) failures++;
++}
++
++static void ansi(XBOX_ANSI_STRING *s, XBOX_OBJECT_ATTRIBUTES *oa, HANDLE root, const char *path)
++{
++    s->Length = (USHORT)strlen(path);
++    s->MaximumLength = (USHORT)(s->Length + 1);
++    s->Buffer = (PCHAR)path;
++    oa->RootDirectory = root;
++    oa->ObjectName = s;
++    oa->Attributes = 0x40;
++}
++
++static NTSTATUS create(HANDLE root, const char *path, ULONG disposition, ULONG options, HANDLE *out)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    XBOX_IO_STATUS_BLOCK ios;
++    ansi(&name, &oa, root, path);
++    *out = NULL;
++    return xbox_NtCreateFile(out, 0xC0100080u /* GENERIC_READ|WRITE|SYNC|READ_ATTR */, &oa, &ios,
++                             NULL, 0, 0, disposition, options);
++}
++
++static NTSTATUS query(HANDLE root, const char *path)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    XBOX_FILE_NETWORK_OPEN_INFORMATION info;
++    ansi(&name, &oa, root, path);
++    return xbox_NtQueryFullAttributesFile(&oa, &info);
++}
++
++static NTSTATUS delete_file(HANDLE root, const char *path)
++{
++    XBOX_ANSI_STRING name;
++    XBOX_OBJECT_ATTRIBUTES oa;
++    ansi(&name, &oa, root, path);
++    return xbox_NtDeleteFile(&oa);
++}
++
++static int host_exists(const char *path)
++{
++#if defined(_WIN32)
++    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
++#else
++    struct stat st;
++    return stat(path, &st) == 0;
++#endif
++}
++
++int main(int argc, char **argv)
++{
++    char root[512], data[600];
++    HANDLE dir, file;
++    NTSTATUS st;
++
++    /* argv[1]: write the report there (Proton drops a console exe's stdout) */
++    if (argc > 1 && !freopen(argv[1], "w", stdout)) return 2;
++    setvbuf(stdout, NULL, _IONBF, 0);
++#if defined(_WIN32)
++    {
++        char tmp[MAX_PATH];
++        GetTempPathA(MAX_PATH, tmp);
++        unsigned n = 0;
++        /* Wine reuses process ids from one run to the next, so the id
++         * alone can name a directory an earlier run left behind. */
++        do snprintf(root, sizeof root, "%sfilerelative-%lu-%u", tmp, (unsigned long)GetCurrentProcessId(), n);
++        while (!CreateDirectoryA(root, NULL) && ++n < 1000);
++        if (n == 1000) return 2;
++        snprintf(data, sizeof data, "%s\\save1\\Data.ssx", root);
++    }
++#else
++    {
++        char tmpl[] = "/tmp/filerelativeXXXXXX";
++        if (!mkdtemp(tmpl)) return 2;
++        snprintf(root, sizeof root, "%s", tmpl);
++        snprintf(data, sizeof data, "%s/save1/Data.ssx", root);
++    }
++#endif
++    xbox_path_init(root, root);
++
++    printf("open relative to a directory handle\n");
++    st = create(NULL, "D:\\save1", XBOX_FILE_OPEN_IF, XBOX_FILE_DIRECTORY_FILE, &dir);
++    check(st == 0 && dir, "directory D:\\save1 opened", (unsigned)st);
++    st = create(dir, "Data.ssx", XBOX_FILE_OVERWRITE_IF, 0x60, &file);
++    check(st == 0 && file, "create Data.ssx relative to it", (unsigned)st);
++    if (file) xbox_NtClose(file);
++    check(host_exists(data), "... and it is inside that directory on the host", 0);
++    st = create(dir, "Data.ssx", XBOX_FILE_OPEN, 0x60, &file);
++    check(st == 0 && file, "reopen Data.ssx relative to it", (unsigned)st);
++    if (file) xbox_NtClose(file);
++    st = query(dir, "Data.ssx");
++    check(st == 0, "query its attributes relative to it", (unsigned)st);
++    st = create(dir, "Missing.ssx", XBOX_FILE_OPEN, 0x60, &file);
++    check((uint32_t)st == 0xC0000034u, "a missing relative name: NAME_NOT_FOUND", (unsigned)st);
++
++    printf("full paths ignore the handle\n");
++    st = query(dir, "D:\\save1\\Data.ssx");
++    check(st == 0, "full path with a RootDirectory set", (unsigned)st);
++
++    printf("delete relative to the handle\n");
++    st = delete_file(dir, "Data.ssx");
++    check(st == 0, "delete Data.ssx relative to it", (unsigned)st);
++    check(!host_exists(data), "... and it is gone on the host", 0);
++    xbox_NtClose(dir);
++
++    printf("%s (%d failure%s)\n", failures ? "FAILED" : "OK", failures, failures == 1 ? "" : "s");
++    return failures ? 1 : 0;
++}
+diff --git c/tests/kernel_memory_bridge_posix/test_main.c w/tests/kernel_memory_bridge_posix/test_main.c
+new file mode 100644
+index 0000000..5fb3363
+--- /dev/null
++++ w/tests/kernel_memory_bridge_posix/test_main.c
+@@ -0,0 +1,403 @@
++/*
++ * Kernel thread objects and file bridges, through the path a title takes.
++ *
++ *   Thread objects            a thread handle leads to a guest thread object
++ *                             whose SignalState and ExitStatus follow the host
++ *                             thread, also through a duplicate of the handle.
++ *   NtSetInformationFile (226) FileRenameInformation: a title that writes
++ *                             x.tmp and renames it to x.dat must find x.dat.
++ *   FATX overwrite            an overwrite followed by a smaller end-of-file
++ *                             keeps the bytes below the new end.
++ *
++ * Each bridge is driven by ordinal through recomp_lookup_kernel, as in
++ * tests/kernel_bridge, but against a real guest window from
++ * xbox_MemoryLayoutInit.
++ */
++#include "kernel.h"
++#include "xbox_memory_layout.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/stat.h>
++
++typedef void (*recomp_func_t)(void);
++static void worker_returns(void);
++static void worker_terminates(void);
++/* Two guest "start routines" for the thread-object checks. */
++recomp_func_t recomp_lookup(uint32_t va)
++{
++    return va == 0x00010000u ? worker_returns
++         : va == 0x00020000u ? worker_terminates : NULL;
++}
++recomp_func_t recomp_lookup_manual(uint32_t va) { (void)va; return NULL; }
++
++extern recomp_func_t recomp_lookup_kernel(uint32_t xbox_va);
++extern RECOMP_TLS uint32_t g_eax, g_esp, g_ecx;
++extern ptrdiff_t g_xbox_mem_offset;
++
++static int failures;
++
++static void check(int ok, const char *what, const char *detail)
++{
++    printf("  %-62s %s", what, ok ? "PASS" : "FAIL");
++    if (!ok && detail) printf(" -- %s", detail);
++    putchar('\n');
++    if (!ok) failures++;
++}
++
++#define G32(va) (*(volatile uint32_t *)((uintptr_t)(va) + g_xbox_mem_offset))
++#define G16(va) (*(volatile uint16_t *)((uintptr_t)(va) + g_xbox_mem_offset))
++#define G8(va)  (*(volatile uint8_t  *)((uintptr_t)(va) + g_xbox_mem_offset))
++#define GP(va)  ((uint8_t *)((uintptr_t)(va) + g_xbox_mem_offset))
++
++enum { ORD_MMALLOC = 165, ORD_MMALLOCEX = 166, ORD_MMFREE = 171,
++       ORD_MMQUERYSIZE = 180, ORD_NTALLOC = 184, ORD_NTCLOSE = 187,
++       ORD_NTCREATE = 190, ORD_NTFREE = 199, ORD_NTSETINFO = 226,
++       ORD_KEWAIT = 159, ORD_NTDUP = 197, ORD_NTWAIT = 233, ORD_OBREF = 246,
++       ORD_OBDEREF = 250, ORD_PSCREATE = 255, ORD_PSTERM = 258,
++       ORD_NTWRITE = 236, ORD_NTQUERYINFO = 211 };
++static const uint32_t ORDS[] = { ORD_MMALLOC, ORD_MMALLOCEX, ORD_MMFREE,
++    ORD_MMQUERYSIZE, ORD_NTALLOC, ORD_NTCLOSE, ORD_NTCREATE, ORD_NTFREE,
++    ORD_NTSETINFO, ORD_KEWAIT, ORD_NTDUP, ORD_NTWAIT, ORD_OBREF, ORD_OBDEREF,
++    ORD_PSCREATE, ORD_PSTERM, ORD_NTWRITE, ORD_NTQUERYINFO };
++#define NORDS (sizeof ORDS / sizeof ORDS[0])
++
++static uint32_t g_thunks, g_stack, g_scratch;
++static volatile int g_worker_go;
++
++/* stdcall: return address, then the arguments. */
++static uint32_t call(uint32_t ordinal, int argc, const uint32_t *argv)
++{
++    unsigned i;
++    recomp_func_t fn = NULL;
++
++    for (i = 0; i < NORDS; i++)
++        if (ORDS[i] == ordinal)
++            fn = recomp_lookup_kernel(G32(g_thunks + 4 * i));
++    if (!fn) {
++        printf("  ordinal %u did not resolve\n", ordinal);
++        failures++;
++        return 0xFFFFFFFFu;
++    }
++    G32(g_stack) = 0xBEEF0001u;
++    for (i = 0; i < (unsigned)argc; i++)
++        G32(g_stack + 4 + 4 * i) = argv[i];
++    g_esp = g_stack;
++    g_eax = 0xDEADBEEFu;
++    fn();
++    return g_eax;
++}
++#define CALL(ord, ...) call((ord), \
++    (int)(sizeof((uint32_t[]){__VA_ARGS__}) / 4), (uint32_t[]){__VA_ARGS__})
++
++static recomp_func_t lookup_ord(uint32_t ordinal)
++{
++    unsigned i;
++
++    for (i = 0; i < NORDS; i++)
++        if (ORDS[i] == ordinal)
++            return recomp_lookup_kernel(G32(g_thunks + 4 * i));
++    return NULL;
++}
++
++/* Runs on the worker's own thread and stack (g_esp is thread-local). */
++static void worker_returns(void)
++{
++    g_eax = 7;
++}
++
++static void worker_terminates(void)
++{
++    recomp_func_t term = lookup_ord(ORD_PSTERM);
++
++    while (!g_worker_go)
++        usleep(1000);
++    g_esp -= 8;
++    G32(g_esp) = 0;              /* return address */
++    G32(g_esp + 4) = 0x1234u;    /* ExitStatus */
++    term();                      /* does not return */
++}
++
++static unsigned char *load(const char *path, size_t *n)
++{
++    FILE *f = fopen(path, "rb");
++    unsigned char *b;
++    long len;
++
++    if (!f) return NULL;
++    fseek(f, 0, SEEK_END);
++    len = ftell(f);
++    rewind(f);
++    b = malloc((size_t)len);
++    if (b && fread(b, 1, (size_t)len, f) != (size_t)len) { free(b); b = NULL; }
++    fclose(f);
++    *n = (size_t)len;
++    return b;
++}
++
++/* ---- FileRenameInformation -------------------------------------------- */
++static uint32_t put_str(uint32_t at, const char *s)
++{
++    /* ANSI_STRING at `at`, text right after it. */
++    uint16_t n = (uint16_t)strlen(s);
++    memcpy(GP(at + 8), s, n + 1);
++    G16(at) = n;
++    G16(at + 2) = (uint16_t)(n + 1);
++    G32(at + 4) = at + 8;
++    return at;
++}
++
++static uint32_t create(const char *path)
++{
++    uint32_t oa = g_scratch + 0x100, str = g_scratch + 0x200;
++    uint32_t ph = g_scratch + 0x10, ios = g_scratch + 0x18, st;
++
++    put_str(str, path);
++    G32(oa) = 0; G32(oa + 4) = str; G32(oa + 8) = 0x40;
++    st = CALL(ORD_NTCREATE, ph, 0xC0110000u /* R|W|DELETE|SYNC */, oa, ios, 0,
++              0x80, 0, 5 /* OVERWRITE_IF */, 0x60);
++    return st ? 0 : G32(ph);
++}
++
++static uint32_t rename_to(uint32_t h, const char *name, int replace)
++{
++    uint32_t info = g_scratch + 0x400, ios = g_scratch + 0x18;
++    uint16_t n = (uint16_t)strlen(name);
++
++    memset(GP(info), 0, 16);
++    G8(info) = (uint8_t)replace;
++    G32(info + 4) = 0;
++    G16(info + 8) = n;
++    G16(info + 10) = (uint16_t)(n + 1);
++    G32(info + 12) = info + 16;
++    memcpy(GP(info + 16), name, n + 1);
++    return CALL(ORD_NTSETINFO, h, ios, info, 16, 10);
++}
++
++static int exists(const char *dir, const char *name)
++{
++    char p[512];
++    struct stat st;
++    snprintf(p, sizeof p, "%s/%s", dir, name);
++    return stat(p, &st) == 0;
++}
++
++static void test_rename(const char *cache)
++{
++    char d[160];
++    uint32_t h, h2, st;
++
++    printf("NtSetInformationFile(FileRenameInformation)\n");
++    h = create("z:\\a.tmp");
++    check(h != 0 && exists(cache, "a.tmp"), "create z:\\a.tmp", NULL);
++    st = rename_to(h, "z:\\a.dat", 0);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0, "rename to a full path succeeds", d);
++    check(exists(cache, "a.dat") && !exists(cache, "a.tmp"),
++          "a.tmp became a.dat on the host", NULL);
++    CALL(ORD_NTCLOSE, h);
++
++    h2 = create("z:\\b.tmp");
++    st = rename_to(h2, "z:\\a.dat", 0);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0xC0000035u, "existing target without ReplaceIfExists collides", d);
++    st = rename_to(h2, "z:\\a.dat", 1);
++    check(st == 0 && !exists(cache, "b.tmp"), "ReplaceIfExists replaces", NULL);
++    st = rename_to(h2, "c.dat", 0);
++    check(st == 0 && exists(cache, "c.dat") && !exists(cache, "a.dat"),
++          "bare name renames within the same directory", NULL);
++    CALL(ORD_NTCLOSE, h2);
++}
++
++/* ---- FATX overwrite: regrowing after an overwrite keeps the data ------ */
++static uint32_t set_eof(uint32_t h, uint32_t size)
++{
++    uint32_t info = g_scratch + 0x400, ios = g_scratch + 0x18;
++    G32(info) = size; G32(info + 4) = 0;
++    return CALL(ORD_NTSETINFO, h, ios, info, 8, 20 /* EndOfFile */);
++}
++
++static long host_file(const char *dir, const char *name, unsigned char *buf,
++                      size_t cap)
++{
++    char p[512];
++    FILE *f;
++    long n;
++    snprintf(p, sizeof p, "%s/%s", dir, name);
++    f = fopen(p, "rb");
++    if (!f) return -1;
++    n = (long)fread(buf, 1, cap, f);
++    fclose(f);
++    return n;
++}
++
++static void test_overwrite(const char *cache)
++{
++    unsigned char got[2048];
++    uint32_t h, i, buf = g_scratch + 0x800, ios = g_scratch + 0x18;
++    long n;
++    int same = 1;
++
++    printf("FATX overwrite (the texture-cache copy)\n");
++    for (i = 0; i < 1024; i++) G8(buf + i) = (uint8_t)(i * 7 + 1);
++    h = create("z:\\o.tmp");
++    set_eof(h, 1024);
++    CALL(ORD_NTWRITE, h, 0, 0, 0, ios, buf, 1024, 0);
++    CALL(ORD_NTCLOSE, h);
++
++    /* second CREATE_ALWAYS, then trim to the true size; XAPI SetEndOfFile
++     * queries the position first */
++    h = create("z:\\o.tmp");
++    CALL(ORD_NTQUERYINFO, h, ios, g_scratch + 0x400, 8, 14 /* Position */);
++    set_eof(h, 700);
++    CALL(ORD_NTCLOSE, h);
++    n = host_file(cache, "o.tmp", got, sizeof got);
++    for (i = 0; n == 700 && i < 700; i++)
++        if (got[i] != (unsigned char)(i * 7 + 1)) same = 0;
++    check(n == 700, "overwrite + end-of-file trims to 700 bytes", NULL);
++    check(n == 700 && same, "the bytes below the new end survive", NULL);
++
++    /* an overwrite followed by a write is a plain truncate */
++    h = create("z:\\o.tmp");
++    CALL(ORD_NTWRITE, h, 0, 0, 0, ios, buf, 4, 0);
++    CALL(ORD_NTCLOSE, h);
++    check(host_file(cache, "o.tmp", got, sizeof got) == 4,
++          "overwrite + 4-byte write leaves 4 bytes", NULL);
++
++    /* an overwrite that is just closed leaves an empty file */
++    h = create("z:\\o.tmp");
++    CALL(ORD_NTCLOSE, h);
++    check(host_file(cache, "o.tmp", got, sizeof got) == 0,
++          "overwrite + close leaves 0 bytes", NULL);
++}
++
++/* ---- thread handles lead to guest thread objects -------------------- */
++static uint32_t spawn(uint32_t routine, uint32_t handle_va)
++{
++    G32(handle_va) = 0;
++    /* ThreadHandle, ExtraSize, KStack, Tls, ThreadId, ctx1, ctx2,
++     * CreateSuspended, DebugStack, StartRoutine */
++    CALL(ORD_PSCREATE, handle_va, 0, 0, 0, 0, 0, 0, 0, 0, routine);
++    return G32(handle_va);
++}
++
++static uint32_t obref(uint32_t h)
++{
++    G32(g_scratch + 0x200) = 0xCCCCCCCCu;
++    CALL(ORD_OBREF, h, 0, g_scratch + 0x200);
++    return G32(g_scratch + 0x200);
++}
++
++static void obderef(uint32_t obj)
++{
++    recomp_func_t fn = lookup_ord(ORD_OBDEREF);
++
++    g_ecx = obj;
++    if (fn) fn();
++}
++
++static void test_threads(void)
++{
++    char d[160];
++    uint32_t h, h2, dup, obj, obj2, st, zero = g_scratch + 0x300;
++
++    printf("Thread objects\n");
++    xbox_SetThreadMode(XBOX_THREAD_MODE_SPAWN);
++    G32(zero) = 0; G32(zero + 4) = 0;   /* a zero relative timeout */
++
++    h = spawn(0x00020000u, g_scratch + 0x100);
++    check(h != 0, "PsCreateSystemThreadEx writes a handle", NULL);
++    obj = obref(h);
++    snprintf(d, sizeof d, "object 0x%08X", obj);
++    check(obj != 0 && obj != 0xCCCCCCCCu && G8(obj) == 6,
++          "ObReferenceObjectByHandle returns a guest thread object", d);
++    check(obj && G32(obj + 4) == 0 && G32(obj + 0x120) == 0x103,
++          "a running thread is not signalled (STILL_ACTIVE)", NULL);
++    st = CALL(ORD_NTWAIT, h, 0, zero);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0x102, "NtWaitForSingleObject times out while it runs", d);
++
++    g_worker_go = 1;
++    st = CALL(ORD_NTWAIT, h, 0, 0);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0, "NtWaitForSingleObject returns once it terminates", d);
++    st = CALL(ORD_KEWAIT, obj, 0, 0, 0, 0);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0, "KeWaitForSingleObject on the object is satisfied", d);
++    snprintf(d, sizeof d, "signal %u exit 0x%08X", G32(obj + 4), G32(obj + 0x120));
++    check(G32(obj + 4) == 1 && G32(obj + 0x120) == 0x1234u,
++          "PsTerminateSystemThread sets SignalState and ExitStatus", d);
++    obderef(obj);
++    CALL(ORD_NTCLOSE, h);
++
++    h2 = spawn(0x00010000u, g_scratch + 0x104);
++    G32(g_scratch + 0x108) = 0;
++    CALL(ORD_NTDUP, h2, g_scratch + 0x108, 2);
++    dup = G32(g_scratch + 0x108);
++    st = CALL(ORD_NTWAIT, h2, 0, 0);
++    check(st == 0, "a worker that returns can be waited on", NULL);
++    obj2 = obref(dup);
++    snprintf(d, sizeof d, "object 0x%08X signal %u exit 0x%08X", obj2,
++             obj2 ? G32(obj2 + 4) : 0, obj2 ? G32(obj2 + 0x120) : 0);
++    check(obj2 && obj2 != 0xCCCCCCCCu && G32(obj2 + 4) == 1 &&
++          G32(obj2 + 0x120) == 0,
++          "returning signals it with STATUS_SUCCESS (via a duplicate)", d);
++    obderef(obj2);
++    snprintf(d, sizeof d, "source 0x%08X duplicate 0x%08X", h2, dup);
++    check(dup != 0 && dup != h2, "NtDuplicateObject gives a new token", d);
++    CALL(ORD_NTCLOSE, h2);
++    st = CALL(ORD_NTWAIT, dup, 0, 0);
++    snprintf(d, sizeof d, "status 0x%08X", st);
++    check(st == 0, "the duplicate outlives the first handle", d);
++    obj2 = obref(dup);
++    check(obj2 && obj2 != 0xCCCCCCCCu && G8(obj2) == 6,
++          "the duplicate still leads to the thread object", NULL);
++    obderef(obj2);
++    CALL(ORD_NTCLOSE, dup);
++
++    obj = obref(0xFFFFFFFEu);
++    check(obj && obj != 0xCCCCCCCCu && G8(obj) == 6 && G32(obj + 4) == 0,
++          "NtCurrentThread has an unsignalled object", NULL);
++    obderef(obj);
++}
++
++int main(int argc, char **argv)
++{
++    char tmpl[] = "/tmp/kmembridgeXXXXXX", cache[256], cmd[300];
++    size_t n = 0;
++    unsigned char *xbe;
++    unsigned i;
++
++    setvbuf(stdout, NULL, _IONBF, 0);
++    if (!mkdtemp(tmpl)) return 2;
++    setenv("XDG_DATA_HOME", tmpl, 1);
++    snprintf(cache, sizeof cache, "%s/xboxrecomp/Cache", tmpl);
++    snprintf(cmd, sizeof cmd, "mkdir -p '%s'", cache);
++    if (system(cmd) != 0) return 2;
++
++    xbe = load(argc > 1 ? argv[1] : "tools/conformance/test.xbe", &n);
++    if (!xbe || !xbox_MemoryLayoutInit(xbe, n)) {
++        printf("cannot map guest memory (run tools/conformance/mkxbe.py)\n");
++        return 2;
++    }
++
++    g_thunks  = xbox_HeapAlloc(0x1000, 4096);
++    g_stack   = xbox_HeapAlloc(0x1000, 4096);
++    g_scratch = xbox_HeapAlloc(0x1000, 4096);
++    for (i = 0; i < NORDS; i++)
++        G32(g_thunks + 4 * i) = 0x80000000u | ORDS[i];
++    G32(g_thunks + 4 * NORDS) = 0;
++    xbox_kernel_set_thunk_address(g_thunks, NORDS + 1);
++    xbox_kernel_bridge_init();
++
++    test_rename(cache);
++    test_overwrite(cache);
++    test_threads();
++
++    snprintf(cmd, sizeof cmd, "rm -rf '%s'", tmpl);
++    (void)system(cmd);
++    printf("\n%d failure(s)\n", failures);
++    return failures ? 1 : 0;
++}
+diff --git c/tests/kernel_mods/CMakeLists.txt w/tests/kernel_mods/CMakeLists.txt
+new file mode 100644
+index 0000000..7262e70
+--- /dev/null
++++ w/tests/kernel_mods/CMakeLists.txt
+@@ -0,0 +1,8 @@
++cmake_minimum_required(VERSION 3.20)
++project(kernel_mods_test C)
++set(CMAKE_C_STANDARD 11)
++# kernel_mods.c is plain C with no runtime dependencies: build it alone.
++add_executable(kernel_mods_test test_main.c ../../src/kernel/kernel_mods.c)
++target_include_directories(kernel_mods_test PRIVATE ../../src/kernel)
++enable_testing()
++add_test(NAME kernel_mods_test COMMAND kernel_mods_test)
+diff --git c/tests/kernel_mods/test_main.c w/tests/kernel_mods/test_main.c
+new file mode 100644
+index 0000000..7d95d82
+--- /dev/null
++++ w/tests/kernel_mods/test_main.c
+@@ -0,0 +1,93 @@
++/* kernel_mods: load order, name checks and lookup order. */
++#include "kernel_mods.h"
++
++#include <ctype.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#ifdef _WIN32
++#include <direct.h>
++#define MKDIR(p) _mkdir(p)
++#else
++#define MKDIR(p) mkdir(p, 0755)
++#endif
++
++static int fails;
++#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
++
++static char root[256];
++
++static void put(const char *rel, const char *text)
++{
++    char p[512];
++    FILE *f;
++    snprintf(p, sizeof p, "%s/%s", root, rel);
++    f = fopen(p, "wb");
++    if (!f) { perror(p); exit(2); }
++    fputs(text, f);
++    fclose(f);
++}
++
++static void dir(const char *rel)
++{
++    char p[512];
++    snprintf(p, sizeof p, "%s/%s", root, rel);
++    MKDIR(p);
++}
++
++static int file_exists(char *path)
++{
++    FILE *f = fopen(path, "rb");
++    if (f) fclose(f);
++    return f != NULL;
++}
++
++/* Stands in for a case-insensitive lookup: the files on "disk" are lower case. */
++static int lower_then_exists(char *path)
++{
++    char *base = strrchr(path, '/');
++    for (char *p = base ? base : path; *p; p++)
++        *p = (char)tolower((unsigned char)*p);
++    return file_exists(path);
++}
++
++int main(void)
++{
++    char out[512];
++    const char *tmp = getenv("TMPDIR");
++    snprintf(root, sizeof root, "%s/kernel_mods_test_%d", tmp && *tmp ? tmp : "/tmp", (int)(size_t)&out % 100000);
++    MKDIR(root);
++    dir("a"); dir("a/data"); dir("b"); dir("b/data");
++    put("a/data/both.big", "a");
++    put("a/data/only_a.big", "a");
++    put("b/data/both.big", "b");
++    put("b/data/upper.big", "b");
++    put("load-order.txt", "# comment\r\n\r\n  a  \r\n../escape\r\nx/y\r\nb\r\n");
++
++    CHECK(xbox_mods_init(root) == 2);
++    CHECK(xbox_mods_count() == 2);
++    CHECK(strcmp(xbox_mods_dir(), root) == 0);
++    CHECK(strcmp(xbox_mods_name(0), "a") == 0);
++    CHECK(strcmp(xbox_mods_name(1), "b") == 0);
++    CHECK(xbox_mods_name(2) == NULL);
++
++    CHECK(xbox_mods_lookup("data/both.big", out, sizeof out, file_exists) == 2);   /* later line wins */
++    CHECK(strstr(out, "/b/data/both.big") != NULL);
++    CHECK(xbox_mods_lookup("data/only_a.big", out, sizeof out, file_exists) == 1);
++    CHECK(xbox_mods_lookup("/data/only_a.big", out, sizeof out, file_exists) == 1);
++    CHECK(xbox_mods_lookup("data/none.big", out, sizeof out, file_exists) == 0);
++    CHECK(xbox_mods_lookup("data/../load-order.txt", out, sizeof out, file_exists) == 0);
++    CHECK(xbox_mods_lookup("data/UPPER.BIG", out, sizeof out, lower_then_exists) == 2);
++
++    CHECK(xbox_mods_init(NULL) == 0);
++    CHECK(xbox_mods_lookup("data/both.big", out, sizeof out, file_exists) == 0);
++    {
++        char missing[300];
++        snprintf(missing, sizeof missing, "%s/nope", root);
++        CHECK(xbox_mods_init(missing) == 0);
++    }
++    if (!fails)
++        printf("kernel_mods: all checks passed\n");
++    return fails != 0;
++}
+diff --git c/tools/recomp/translator.py w/tools/recomp/translator.py
 index 3cd9250..0e9c350 100644
---- a/tools/recomp/translator.py
-+++ b/tools/recomp/translator.py
+--- c/tools/recomp/translator.py
++++ w/tools/recomp/translator.py
 @@ -1311,6 +1311,36 @@ class FunctionTranslator:
                      return 0
          return 0

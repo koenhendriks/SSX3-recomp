@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stand-in for glslc inside the Steam Runtime SDK, which has none: copies the
+# SPIR-V made by a normal build (SPV_DIR, build-linux/vk/vkr_gen) to the -o path.
+# SPIR-V does not depend on the machine; build_portable.sh checks it is fresh.
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ -n "$out" ] || { echo "glslc-prebuilt: no -o" >&2; exit 1; }
+src="$SPV_DIR/$(basename "$out")"
+[ -f "$src" ] || { echo "glslc-prebuilt: no $src (build the shaders on the host first)" >&2; exit 1; }
+cp "$src" "$out"

@@ -219,13 +219,17 @@ else()
     find_package(SDL2_ttf QUIET)
     find_package(Fontconfig QUIET)
     if(TARGET SDL2::SDL2 AND TARGET SDL2_ttf::SDL2_ttf AND TARGET Fontconfig::Fontconfig)
-        add_executable(ssx3_launcher src/launcher/launcher_sdl.c)
+        add_executable(ssx3_launcher src/launcher/launcher_sdl.c src/launcher/mods_list.c)
         set_target_properties(ssx3_launcher PROPERTIES OUTPUT_NAME launcher)
         target_link_libraries(ssx3_launcher PRIVATE SDL2::SDL2 SDL2_ttf::SDL2_ttf
                               Fontconfig::Fontconfig)
     else()
         message(STATUS "launcher: SDL2_ttf or fontconfig not found, not built")
     endif()
+    # ctest --test-dir build-linux: the launcher's mod list (tests/mods_list_test.c).
+    enable_testing()
+    add_executable(mods_list_test tests/mods_list_test.c src/launcher/mods_list.c)
+    add_test(NAME mods_list_test COMMAND mods_list_test)
 endif()
 
 # ── Game-specific additions ─────────────────────────────────────
