@@ -28,7 +28,8 @@ extern const char *ssx3_ScreenNow(void);              /* ssx3_overrides.c */
 extern int ssx3_InGameNow(void);                      /* game_state.c */
 
 #define BUCKETS 1000                    /* 0.25 ms each: up to 250 ms */
-#define HITCH_MS 100.0
+#define HITCH_MS_DEFAULT 100.0
+static double s_hitch_ms = -1;          /* RECOMP_PERF_HITCH_MS: a frame this long is a hitch line */
 #define SETTLE_MS 2000.0                /* an event's first frames still load */
 
 typedef struct {
@@ -206,7 +207,11 @@ void ssx3_PerfFlip(void)
             sec_frames = 0;
         }
     }
-    if (dt >= HITCH_MS && ssx3_InGameNow()) {
+    if (s_hitch_ms < 0) {
+        const char *e = getenv("RECOMP_PERF_HITCH_MS");
+        s_hitch_ms = e && atof(e) >= 20.0 ? atof(e) : HITCH_MS_DEFAULT;
+    }
+    if (dt >= s_hitch_ms && ssx3_InGameNow()) {
         if (t - hitch_t >= 1000.0) {
             char where[256];
             const char *scr = ssx3_ScreenNow();
