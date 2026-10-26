@@ -146,5 +146,13 @@ void vkr_frame_release(VkrContext *c, int slot);
 /* With RECOMP_RES above the guest's: the full-resolution image of the frame
  * (after vkr_frame_pixels), else NULL. */
 const uint8_t *vkr_frame_pixels_full(VkrContext *c, int slot, uint32_t *w, uint32_t *h);
+/* Frames shared with the window's D3D11 presenter (Windows): whether the
+ * presenter's textures are wanted (again) for the full image's size w x h,
+ * on the device with this LUID; their import; the texture a frame went to. */
+int vkr_shared_wanted(VkrContext *c, uint32_t *w, uint32_t *h, uint8_t luid[8]);
+int vkr_shared_import(VkrContext *c, void *const handles[4], uint32_t w, uint32_t h,
+                      const uint8_t luid[8]);
+int vkr_frame_shared(VkrContext *c, int slot, uint32_t *w, uint32_t *h);
+void vkr_want_full(VkrContext *c, int on);
 
 #endif

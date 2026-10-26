@@ -64,3 +64,33 @@ turns these logs on for a tester.
 Before, at 144 Hz: frames presented when ready, 13.9 / 20.8 ms in no fixed
 pattern, and no VRR in a window. Game speed stays 1.0000 (ticks per second
 / 60); the input ring held its depth for 7.5 min on a 59.94 Hz grid.
+
+## Zero-copy presentation (Windows)
+
+At 4K the renderer read every frame back to the CPU, the window thread
+copied it and the presenter uploaded it again: 33 MB three times a frame,
+9-14 ms of upload plus 10-35 ms of frame-latency wait, and a VRR TV held
+frames 25-45 ms every few seconds. Now four D3D11 textures (NT handles,
+keyed mutex) are imported into Vulkan (`VK_KHR_external_memory_win32`,
+`VK_KHR_win32_keyed_mutex`, matched by adapter LUID); each finished frame
+is copied into the next one on the GPU and drawn from there. The F3
+counter is drawn as its own small box. `RECOMP_PRESENT_SHARED=0` = the
+readback path; recording (`RECOMP_RECORD`) still reads frames back.
+
+Quiet PC, 60 s Snow Jam races, G-Sync on:
+
+| Run | Shared | FPS avg | Race seconds with an on-glass frame > 25 ms |
+|---|---|---|---|
+| 1440p window x3 | on | 60.5 | 4, 0, 1 |
+| 1440p window x3 | off | 60.5-60.6 | 8, 11, 11 |
+| 4K fullscreen | on | 60.5 | 0 of 55 |
+
+On an RTX 5090 + LG G4 (4K 144 Hz, HDMI VRR): a 4-minute session at 60.0
+FPS, 233 of 237 seconds without an on-glass frame over 25 ms (the others
+at load, race end and exit); before, a stall every 5-25 s.
+
+Two pacing fixes came with it: lateness is measured when a frame is
+published (measured at pickup, a long lead read as lateness and raised the
+lead to its cap after a single hitch), and a queued frame is shown while
+the newer one's own time is still ahead (`pc_pacer_skip`; showing only the
+newest dropped every other frame once the lead passed a refresh).

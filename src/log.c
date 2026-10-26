@@ -188,7 +188,7 @@ static volatile int s_pump_waiting, s_pump_reads;
 
 static const struct { const char *tag; int level; } k_tags[] = {
     /* only with RECOMP_FRAME_STATS (opt-in): kept at a player's level */
-    {"[FRAMES]", LOG_INFO}, {"[GLASS]", LOG_INFO}, {"[HOLDSTACK]", LOG_INFO},
+    {"[FRAMES]", LOG_INFO}, {"[GLASS]", LOG_INFO}, {"[HOLDSTACK]", LOG_INFO}, {"[PRESENT-SLOW]", LOG_INFO},
     /* C9: the always-on diagnostics; opt-in traces stay DEBUG (the default
      * for any [TAG] line) */
     {"[NV2A-WARN]", LOG_WARN}, {"[APU-WARN]", LOG_WARN}, {"[ABI]", LOG_WARN},

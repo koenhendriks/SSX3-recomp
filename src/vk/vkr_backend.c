@@ -40,6 +40,9 @@ static double now_ms(void)
 #endif
 }
 
+extern double g_vkr_alloc_ms;
+extern unsigned g_vkr_allocs;
+
 static void stats_tick(void)
 {
     static double last;
@@ -48,8 +51,9 @@ static void stats_tick(void)
     if (t - last < 1000.0)
         return;
     fprintf(stderr, "[VKRSTAT] draws %u tex-creates %u flips %u | ms/s: draw-total %.0f lookup+hash %.0f"
-            " decode+upload %.0f (decode %.0f, hd+create %.0f) vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
-            s_t[0], s_t[1], s_t[2], s_t[6], s_t[7], s_t[3], s_t[4]);
+            " decode+upload %.0f (decode %.0f, hd+create %.0f, of it %u vkAllocateMemory %.0f) vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
+            s_t[0], s_t[1], s_t[2], s_t[6], s_t[7], g_vkr_allocs, g_vkr_alloc_ms, s_t[3], s_t[4]);
+    g_vkr_alloc_ms = 0; g_vkr_allocs = 0;
     memset(s_t, 0, sizeof s_t); memset(s_n, 0, sizeof s_n);
     last = t;
 }
@@ -64,6 +68,8 @@ extern ptrdiff_t xbox_GetMemoryOffset(void);
 extern void *xbox_GuestToHost(uint32_t va);   /* any mapped guest range (also the web build) */
 extern void xbox_FramebufferPublishImage(const uint32_t *px, uint32_t w, uint32_t h);
 extern void xbox_FramebufferPublishImageVbl(const uint32_t *px, uint32_t w, uint32_t h, double vblank_ms);
+extern int xbox_FramebufferSharedMake(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8]);
+extern void xbox_FramebufferPublishShared(int tex, uint32_t w, uint32_t h, double vblank_ms);
 extern double xbox_FrameVblankPop(void);
 extern void xbox_FrameVblankFlush(void);
 extern double xbox_VblankLastEdgeMs(void);
@@ -328,6 +334,13 @@ static void *flip_thread(void *unused)
                        px + (size_t)y * j.w * 4, (size_t)j.w * 4);
             glitch_catch(px, j.w, j.h, j.frame);
             /* Higher internal resolution: the window shows the full image. */
+            {
+                /* Copied into a shared texture on the GPU: hand it to the window. */
+                uint32_t tw, th;
+                int tex = vkr_frame_shared(s_vk, j.slot, &tw, &th);
+                if (tex >= 0)
+                    xbox_FramebufferPublishShared(tex, tw, th, j.vblank_ms);
+            }
             full = vkr_frame_pixels_full(s_vk, j.slot, &fw, &fh);
             if (full) {
                 xbox_FramebufferPublishImageVbl((const uint32_t *)full, fw, fh, j.vblank_ms);
@@ -2360,6 +2373,21 @@ static void be_flip(const Nv2aTarget *t)
     s_draw_total = s_draw_no;
     s_draw_no = 0;
     j.shot = mbtest_flip();
+    {
+        /* The window's shared frame textures (Windows): made, or made again
+         * at a new size, before this frame is submitted into one of them. */
+        static int full_set;
+        uint32_t sw, sh;
+        uint8_t luid[8], dluid[8];
+        void *handles[4];
+        if (!full_set) {
+            full_set = 1;
+            vkr_want_full(s_vk, getenv("RECOMP_RECORD") || getenv("RECOMP_MBLUR_TEST"));
+        }
+        if (vkr_shared_wanted(s_vk, &sw, &sh, luid)
+            && xbox_FramebufferSharedMake(sw, sh, handles, dluid) == 4)
+            vkr_shared_import(s_vk, handles, sw, sh, dluid);
+    }
     j.slot = vkr_flip_submit(s_vk);
     j.frame = s_draw_frame++;
     /* The vblank of the tick this frame was rendered for (pushed by the

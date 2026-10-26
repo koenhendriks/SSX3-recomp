@@ -6695,10 +6695,10 @@ index 8acb0af..aa6c0e8 100644
  void nv2a_vsh_set_constant(uint32_t index, const float v[4]);
 diff --git a/src/kernel/present_cadence.c b/src/kernel/present_cadence.c
 new file mode 100644
-index 0000000..411d63a
+index 0000000..ed82a24
 --- /dev/null
 +++ b/src/kernel/present_cadence.c
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,363 @@
 +/* Ported from xenophobentx/xboxrecomp (branch takedawn, MIT), 2026-10-26.
 + *
 + * present_cadence.c - see present_cadence.h. Pure arithmetic: no clock, no
@@ -6884,6 +6884,15 @@ index 0000000..411d63a
 +    }
 +}
 +
++int pc_pacer_skip(const pc_pacer *p, uint64_t next_vblank_ns, uint64_t now_ns)
++{
++    pc_aim a;
++    if (p->strategy <= PC_LEGACY || !next_vblank_ns)
++        return 1;
++    pc_pacer_aim(p, next_vblank_ns, now_ns, &a);
++    return !a.at_ns || a.at_ns <= now_ns;
++}
++
 +int pc_pacer_glass(pc_pacer *p, const pc_aim *aim, uint64_t glass_ns)
 +{
 +    int raised = 0;
@@ -7055,10 +7064,10 @@ index 0000000..411d63a
 +}
 diff --git a/src/kernel/present_cadence.h b/src/kernel/present_cadence.h
 new file mode 100644
-index 0000000..5294b15
+index 0000000..e53adb4
 --- /dev/null
 +++ b/src/kernel/present_cadence.h
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,236 @@
 +/* Ported from xenophobentx/xboxrecomp (branch takedawn, MIT), 2026-10-26.
 + *
 + * present_cadence.h - when frames reach the glass: the strategy per display,
@@ -7211,6 +7220,12 @@ index 0000000..5294b15
 +void pc_pacer_set_handover(pc_pacer *p, uint64_t handover_ns);
 +/* The frame whose emulated vblank was vblank_ns, picked up at now_ns. */
 +void pc_pacer_aim(const pc_pacer *p, uint64_t vblank_ns, uint64_t now_ns, pc_aim *out);
++/* A frame waits for its present behind another, newer one whose vblank was
++ * next_vblank_ns: 1 when the older should be given up -- the newer one's own
++ * time has come (or it has none: legacy, no vblank) -- else 0, show both in
++ * turn. With a lead longer than a refresh the next frame is often queued
++ * before this one is shown; dropping it then showed every other frame. */
++int  pc_pacer_skip(const pc_pacer *p, uint64_t next_vblank_ns, uint64_t now_ns);
 +/* The frame aimed with *aim reached the glass at glass_ns (0: never shown).
 + * Returns 1 when the depth or the lead was raised, -1 when a raise was taken
 + * back (PC_DECAY_FRAMES calm frames), 2 when frames came early and the
@@ -9514,7 +9529,7 @@ index 0000000..165eab0
 +    return s_lut_serial;
 +}
 diff --git a/src/video/fb_present.c b/src/video/fb_present.c
-index 08bae4b..4202cd0 100644
+index 08bae4b..8015991 100644
 --- a/src/video/fb_present.c
 +++ b/src/video/fb_present.c
 @@ -15,12 +15,17 @@
@@ -9556,7 +9571,7 @@ index 08bae4b..4202cd0 100644
  void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch)
  {
      /* RECOMP_FB_VA pins the window to one guest address instead of following
-@@ -98,6 +117,82 @@ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
+@@ -98,6 +117,84 @@ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
      InterlockedExchange(&s_present_idx, next);
  }
  
@@ -9592,6 +9607,7 @@ index 08bae4b..4202cd0 100644
 + * frame to frame -- a period of judder in where it was aimed. One producer,
 + * one consumer: a full FIFO drops the new entry, an empty one gives 0. */
 +static double s_hi_vbl[3];                 /* each buffer's frame's vblank, ms */
++static uint64_t s_hi_arr[3];               /* when each buffer's frame was published, ns */
 +static double s_pub_vbl;                   /* set by xbox_FramebufferPublishImageVbl */
 +
 +void xbox_FramebufferPublishImageVbl(const uint32_t *px, uint32_t w, uint32_t h, double vblank_ms)
@@ -9618,6 +9634,7 @@ index 08bae4b..4202cd0 100644
 +    memcpy(s_hi[b], px, n * 4);
 +    s_hi_w[b] = w; s_hi_h[b] = h;
 +    s_hi_vbl[b] = s_pub_vbl;
++    s_hi_arr[b] = gpu_present_now_ns();
 +    s_hi_back = InterlockedExchange(&s_hi_mid, b | 4) & 3;
 +    InterlockedExchange(&s_hi_tick, (LONG)GetTickCount());
 +    InterlockedIncrement(&s_hi_serial);
@@ -9639,7 +9656,7 @@ index 08bae4b..4202cd0 100644
  /* Which keys are down, for the pad stand-in in src/input.
   *
   * GetAsyncKeyState looked like the cheaper way to ask and does not work
-@@ -110,6 +205,7 @@ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
+@@ -110,6 +207,7 @@ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
   * thread and read only by the USB thread, one byte at a time, and a press
   * seen a frame late is indistinguishable from one made a frame later. */
  static volatile unsigned char s_key_down[256];
@@ -9647,7 +9664,7 @@ index 08bae4b..4202cd0 100644
  
  /* Title bar, the way ps3recomp's window shows it. Written by the flip,
   * read once a second by the window thread; a torn read shows one stale
-@@ -127,10 +223,91 @@ void xbox_FramebufferWindowSetTitle(const uint16_t *name, int max_chars)
+@@ -127,10 +225,91 @@ void xbox_FramebufferWindowSetTitle(const uint16_t *name, int max_chars)
          s_title[i] = 0;
  }
  
@@ -9739,7 +9756,7 @@ index 08bae4b..4202cd0 100644
  }
  
  int xbox_FramebufferKeyDown(int vk)
-@@ -140,18 +317,218 @@ int xbox_FramebufferKeyDown(int vk)
+@@ -140,18 +319,221 @@ int xbox_FramebufferKeyDown(int vk)
      return s_key_down[vk] != 0;
  }
  
@@ -9833,6 +9850,9 @@ index 08bae4b..4202cd0 100644
 +        {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'W', {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}},
 +        {'N', {0x11,0x19,0x15,0x13,0x11,0x11,0x11}}, {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
 +        {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'X', {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
++        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}},
++        {'V', {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}}, {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
++        {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}}, {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
 +        {'.', {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}}};
 +    size_t i;
 +    if (ch >= '0' && ch <= '9')
@@ -9959,7 +9979,7 @@ index 08bae4b..4202cd0 100644
          /* RECOMP_KEY_TRACE: each key as it arrives, edge-triggered.
           *
           * The obvious diagnostic -- sampling which keys are held, once a
-@@ -179,7 +556,12 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
+@@ -179,7 +561,12 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
      /* Alt-tabbing away with a key held would leave it held for ever. */
      case WM_KILLFOCUS:
          memset((void *)s_key_down, 0, sizeof s_key_down);
@@ -9972,7 +9992,7 @@ index 08bae4b..4202cd0 100644
      }
      return DefWindowProcA(h, m, w, l);
  }
-@@ -217,32 +599,55 @@ static void fb_convert(const uint8_t *src, uint32_t bpp)
+@@ -217,32 +604,55 @@ static void fb_convert(const uint8_t *src, uint32_t bpp)
   * A black window is ambiguous: it means either that the read path is wrong or
   * that the title really did render black. Dumping the same converted pixels
   * the window draws settles which, and does it without a screenshot. */
@@ -10036,7 +10056,7 @@ index 08bae4b..4202cd0 100644
              line[x * 3 + 0] = (uint8_t)(src[x] & 0xFF);
              line[x * 3 + 1] = (uint8_t)((src[x] >> 8) & 0xFF);
              line[x * 3 + 2] = (uint8_t)((src[x] >> 16) & 0xFF);
-@@ -250,12 +655,329 @@ int xbox_FramebufferDumpBmp(const char *path)
+@@ -250,12 +660,460 @@ int xbox_FramebufferDumpBmp(const char *path)
          fwrite(line, 1, row, f);
      }
      free(line);
@@ -10247,8 +10267,11 @@ index 08bae4b..4202cd0 100644
 +    return 1;
 +}
 +
-+/* Present front buffer k paced; 0 when nothing was shown. */
-+static int pacing_present(LONG k)
++/* Present one frame paced -- CPU pixels px, or shared texture tex (px
++ * NULL) -- w x h, whose vblank was vbl (ms) and which was published at
++ * arr_ns; 0 when nothing was shown. */
++static int pacing_present_frame(const uint32_t *px, int tex, uint32_t w, uint32_t h, double vbl,
++                                uint64_t arr_ns)
 +{
 +    pc_aim aim;
 +    uint64_t now = gpu_present_now_ns(), g;
@@ -10256,21 +10279,45 @@ index 08bae4b..4202cd0 100644
 +    int r;
 +    memset(&aim, 0, sizeof aim);
 +    pacing_probe(now);
-+    if (s_pstrat > PC_LEGACY && s_hi_vbl[k] > 0.0) {
-+        double lag = (double)now / 1e6 - s_hi_vbl[k];
++    if (s_pstrat > PC_LEGACY && vbl > 0.0) {
++        /* How late the frame came, from its publish: measured when the
++         * window thread got to it instead, a long lead (the thread waiting
++         * for an earlier frame's time) read as lateness and raised the lead
++         * further -- to its 33 ms cap after a single hitch. */
++        double lag = (double)(arr_ns && arr_ns <= now ? arr_ns : now) / 1e6 - vbl;
 +        if (lag < s_lag_min) s_lag_min = lag;
 +        if (lag > s_lag_max) s_lag_max = lag;
 +        if (s_nlags < 128 && lag >= 0.0 && lag < 200.0)
 +            s_lags[s_nlags++] = (float)lag;
-+        pc_pacer_aim(&s_pacer, (uint64_t)(s_hi_vbl[k] * 1e6), now, &aim);
++        pc_pacer_aim(&s_pacer, (uint64_t)(vbl * 1e6), now, &aim);
 +        if (aim.at_ns && now >= aim.at_ns)
 +            s_p_late++;
 +        if (aim.at_ns > now + 100000000ull)   /* never park a frame */
 +            aim.at_ns = 0;
 +    }
-+    r = gpu_present_frame_at(s_hi[k], s_hi_w[k], s_hi_h[k], 1, aim.at_ns);
++    r = px ? gpu_present_frame_at(px, w, h, 1, aim.at_ns)
++           : gpu_present_shared_at(tex, w, h, 1, aim.at_ns);
 +    {
 +        uint64_t t = gpu_present_now_ns();
++        if (s_p_prev && t > s_p_prev && (double)(t - s_p_prev) / 1e6 > 25.0
++            && s_pstrat > PC_LEGACY && getenv("RECOMP_FRAME_STATS")) {
++            /* A present over 25 ms after the last: where this one's time went,
++             * and how late its frame was picked up (at most 2 lines a second). */
++            static uint64_t said;
++            static int n;
++            double st[5];
++            if (t - said > 1000000000ull) { said = t; n = 0; }
++            if (n++ < 2) {
++                gpu_present_last_steps(st);
++                fprintf(stderr, "[PRESENT-SLOW] %.1f ms since the last present: hand-over %.1f, latency wait %.1f,"
++                        " upload+draw %.1f, wait for its time %.1f, Present %.1f ms;"
++                        " frame %.1f ms after its vblank, aimed at vblank+%.1f, lead %.1f\n",
++                        (double)(t - s_p_prev) / 1e6, px ? 0.0 : st[4], st[0], st[1], st[2], st[3],
++                        vbl > 0.0 ? (double)now / 1e6 - vbl : -1.0,
++                        aim.at_ns && vbl > 0.0 ? (double)aim.at_ns / 1e6 - vbl : -1.0,
++                        s_pacer.lead_ns / 1e6);
++            }
++        }
 +        if (s_p_prev && t > s_p_prev) {
 +            double iv = (double)(t - s_p_prev) / 1e6;
 +            if (iv < 50.0) {
@@ -10304,6 +10351,110 @@ index 08bae4b..4202cd0 100644
 +        s_glass_prev = g;
 +    }
 +    return r;
++}
++
++static int pacing_present(LONG k)
++{
++    gpu_present_overlay(NULL, 0, 0, 0, 0);       /* drawn into the pixels instead */
++    return pacing_present_frame(s_hi[k], -1, s_hi_w[k], s_hi_h[k], s_hi_vbl[k], s_hi_arr[k]);
++}
++
++/* Frames published as shared textures (the renderer copied them on the GPU,
++ * gpu_present.c): a queue the window thread empties, showing the newest
++ * and handing the others back. */
++typedef struct { int tex; uint32_t w, h; double vbl; uint64_t arr; } ShFrame;
++#define SHQ 8
++static ShFrame       s_shq[SHQ];
++static volatile LONG s_shq_head, s_shq_tail, s_sh_tick;
++
++void xbox_FramebufferPublishShared(int tex, uint32_t w, uint32_t h, double vblank_ms)
++{
++    LONG t = s_shq_tail;
++    ShFrame *f = &s_shq[t % SHQ];
++    f->tex = tex; f->w = w; f->h = h; f->vbl = vblank_ms;
++    f->arr = gpu_present_now_ns();
++    InterlockedExchange(&s_shq_tail, t + 1);
++    InterlockedExchange(&s_sh_tick, (LONG)GetTickCount());
++    if (s_hi_event)
++        SetEvent(s_hi_event);
++}
++
++int xbox_FramebufferSharedMake(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8])
++{
++    if (!gpu_present_active())
++        return 0;
++    /* Frames queued for the old textures are not shown (their indices name
++     * the new ones, which no frame has been copied into yet). */
++    InterlockedExchange(&s_shq_head, InterlockedCompareExchange(&s_shq_tail, 0, 0));
++    return gpu_present_shared_make(w, h, handles, luid);
++}
++
++/* The F3 counter as its own small box for a shared frame (the pixel path
++ * draws it into the frame): fps_overlay_draw's box and text, alone. */
++static void overlay_box_for(uint32_t frame_h)
++{
++    static uint32_t *box;
++    static size_t cap;
++    char text[48];
++    int sc = (int)(frame_h / 240u), len, i, x, y, bw, bh;
++    if (!fps_overlay_on()) {
++        gpu_present_overlay(NULL, 0, 0, 0, 0);
++        return;
++    }
++    memcpy(text, s_overlay_text, sizeof text);
++    text[sizeof text - 1] = 0;
++    len = (int)strlen(text);
++    if (sc < 2) sc = 2;
++    bw = (len * 6 + 2) * sc; bh = 10 * sc;
++    if (!len || (size_t)bw * bh > cap) {
++        free(box);
++        cap = len ? (size_t)bw * bh : 0;
++        box = cap ? (uint32_t *)malloc(cap * 4) : NULL;
++        if (!box) { cap = 0; gpu_present_overlay(NULL, 0, 0, 0, 0); return; }
++    }
++    memset(box, 0, (size_t)bw * bh * 4);
++    for (i = 0; i < len; i++) {
++        const unsigned char *g = glyph(text[i]);
++        int r, cx, gx = (i * 6 + 1) * sc, gy = sc + sc / 2;
++        if (!g)
++            continue;
++        for (r = 0; r < 7; r++)
++            for (cx = 0; cx < 5; cx++)
++                if (g[r] & (0x10 >> cx))
++                    for (y = gy + r * sc; y < gy + (r + 1) * sc && y < bh; y++)
++                        for (x = gx + cx * sc; x < gx + (cx + 1) * sc && x < bw; x++)
++                            box[(size_t)y * bw + x] = 0xFFFFFF;
++    }
++    gpu_present_overlay(box, (uint32_t)bw, (uint32_t)bh, (uint32_t)(sc * 3), (uint32_t)(sc * 3));
++}
++
++/* The window loop's shared branch: 1 when a shared frame was handled.
++ * Frames are shown in turn while each newer one's own time is still ahead
++ * (pc_pacer_skip): a timed lead over a refresh queues the next frame before
++ * this one is shown, and showing only the newest dropped every other frame.
++ * More than two waiting: behind, the older ones go (the renderer has four
++ * textures and must not wait for one). */
++static int shared_present_pending(void)
++{
++    LONG h = s_shq_head, t = InterlockedCompareExchange(&s_shq_tail, 0, 0);
++    ShFrame f;
++    if (h == t)
++        return 0;
++    if (t - h > SHQ)
++        h = t - SHQ;                          /* lost entries: none to hand back */
++    while (t - h > 1                          /* older ones: hand them back */
++           && (t - h > 2 || s_pstrat < 0
++               || pc_pacer_skip(&s_pacer, (uint64_t)(s_shq[(h + 1) % SHQ].vbl * 1e6),
++                                gpu_present_now_ns())))
++        gpu_present_shared_retire(s_shq[h++ % SHQ].tex);
++    f = s_shq[h % SHQ];
++    InterlockedExchange(&s_shq_head, h + 1);
++    overlay_box_for(f.h);
++    s_pres_shown++;
++    if (!pacing_present_frame(NULL, f.tex, f.w, f.h, f.vbl, f.arr))
++        Sleep(1);
++    s_pres_loops++;
++    return 1;
 +}
 +
 +/* Once a second with RECOMP_FRAME_STATS: what reached the glass. */
@@ -10368,7 +10519,7 @@ index 08bae4b..4202cd0 100644
  static DWORD WINAPI fb_thread(LPVOID unused)
  {
      HWND hwnd;
-@@ -274,18 +996,56 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -274,18 +1132,56 @@ static DWORD WINAPI fb_thread(LPVOID unused)
          wc.lpszClassName = "XboxRecompFramebuffer";
          RegisterClassA(&wc);
      }
@@ -10432,7 +10583,7 @@ index 08bae4b..4202cd0 100644
  
      memset(&bi, 0, sizeof(bi));
      bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
-@@ -299,6 +1059,11 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -299,6 +1195,11 @@ static DWORD WINAPI fb_thread(LPVOID unused)
  
      fprintf(stderr, "  [FBWIN] framebuffer window open (%ux%u)\n",
              s_fb_width, s_fb_height);
@@ -10444,7 +10595,7 @@ index 08bae4b..4202cd0 100644
  
      while (InterlockedCompareExchange(&s_fb_running, 1, 1)) {
          MSG msg;
-@@ -306,7 +1071,42 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -306,7 +1207,50 @@ static DWORD WINAPI fb_thread(LPVOID unused)
              TranslateMessage(&msg);
              DispatchMessageA(&msg);
          }
@@ -10456,7 +10607,15 @@ index 08bae4b..4202cd0 100644
 +                InterlockedExchange(&s_client_h, cr.bottom - cr.top);
 +            }
 +        }
-+        if (gpu_present_active() && (s_hi_mid & 4 || s_hi_have)
++        if (gpu_present_active() && (LONG)GetTickCount() - s_sh_tick < 500) {
++            /* Shared frames (the renderer copies each one into a texture
++             * of ours on the GPU): no pixels cross the CPU. */
++            if (!shared_present_pending()) {
++                MsgWaitForMultipleObjects(1, &s_hi_event, FALSE, 20, QS_ALLINPUT);
++                if (!shared_present_pending())
++                    goto window_tail;
++            }
++        } else if (gpu_present_active() && (s_hi_mid & 4 || s_hi_have)
 +            && (LONG)GetTickCount() - s_hi_tick < 500) {
 +            /* The backend's own image (full resolution), each new frame
 +             * presented once, as soon as it is published: wait for the next
@@ -10488,7 +10647,7 @@ index 08bae4b..4202cd0 100644
              /* A finished frame, published by the flip. Copied into s_rgb so
               * the dump path and GDI see one consistent image even if the
               * next flip lands mid-blit. */
-@@ -314,19 +1114,28 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -314,19 +1258,28 @@ static DWORD WINAPI fb_thread(LPVOID unused)
              if (s_present[idx])
                  memcpy(s_rgb, s_present[idx],
                         (size_t)s_fb_width * s_fb_height * 4);
@@ -10523,7 +10682,7 @@ index 08bae4b..4202cd0 100644
          {
              /* One dump a few seconds in, so the title has had time to render
               * something rather than catching the first blank frame.
-@@ -357,6 +1166,10 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -357,6 +1310,10 @@ static DWORD WINAPI fb_thread(LPVOID unused)
              if (now - t0 >= 1000) {
                  LONG f = s_flips;
                  wchar_t tb[128];
@@ -10534,7 +10693,7 @@ index 08bae4b..4202cd0 100644
                  _snwprintf(tb, 127, L"%ls | FPS: %.1f | draws: %ld", s_title,
                             t0 ? (f - f0) * 1000.0 / (now - t0) : 0.0,
                             (long)s_frame_draws);
-@@ -365,9 +1178,12 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+@@ -365,9 +1322,12 @@ static DWORD WINAPI fb_thread(LPVOID unused)
                  t0 = now; f0 = f;
              }
          }
@@ -10548,7 +10707,7 @@ index 08bae4b..4202cd0 100644
      ReleaseDC(hwnd, hdc);
      DestroyWindow(hwnd);
      free(s_rgb);
-@@ -390,11 +1206,4 @@ void xbox_FramebufferWindowStart(void)
+@@ -390,11 +1350,4 @@ void xbox_FramebufferWindowStart(void)
          InterlockedExchange(&s_fb_running, 0);
  }
  
@@ -10562,10 +10721,10 @@ index 08bae4b..4202cd0 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..c182100
+index 0000000..b9555b8
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,511 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -11065,12 +11224,24 @@ index 0000000..c182100
 +    (void)vblank_ms;
 +    xbox_FramebufferPublishImage(px, w, h);
 +}
++
++/* Frames shared on the GPU are the Windows presenter's (fb_present.c). */
++int xbox_FramebufferSharedMake(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8])
++{
++    (void)w; (void)h; (void)handles; (void)luid;
++    return 0;
++}
++
++void xbox_FramebufferPublishShared(int tex, uint32_t w, uint32_t h, double vblank_ms)
++{
++    (void)tex; (void)w; (void)h; (void)vblank_ms;
++}
 diff --git a/src/video/fb_present_web.c b/src/video/fb_present_web.c
 new file mode 100644
-index 0000000..09b93a1
+index 0000000..c52b589
 --- /dev/null
 +++ b/src/video/fb_present_web.c
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,293 @@
 +/**
 + * Browser counterpart of fb_present_sdl.c: the guest framebuffer for a page.
 + *
@@ -11352,6 +11523,18 @@ index 0000000..09b93a1
 +    (void)vblank_ms;
 +    xbox_FramebufferPublishImage(px, w, h);
 +}
++
++/* Frames shared on the GPU are the Windows presenter's (fb_present.c). */
++int xbox_FramebufferSharedMake(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8])
++{
++    (void)w; (void)h; (void)handles; (void)luid;
++    return 0;
++}
++
++void xbox_FramebufferPublishShared(int tex, uint32_t w, uint32_t h, double vblank_ms)
++{
++    (void)tex; (void)w; (void)h; (void)vblank_ms;
++}
 diff --git a/src/video/frame_vblank.c b/src/video/frame_vblank.c
 new file mode 100644
 index 0000000..5846d44
@@ -11403,10 +11586,10 @@ index 0000000..5846d44
 +}
 diff --git a/src/video/gpu_present.c b/src/video/gpu_present.c
 new file mode 100644
-index 0000000..6661d60
+index 0000000..0e8f5a4
 --- /dev/null
 +++ b/src/video/gpu_present.c
-@@ -0,0 +1,544 @@
+@@ -0,0 +1,761 @@
 +/*
 + * D3D11 presentation for the framebuffer window (ROADMAP Phase 2.1).
 + *
@@ -11426,6 +11609,7 @@ index 0000000..6661d60
 +#include <d3d11.h>
 +#include <dxgi.h>
 +#include <dxgi1_5.h>
++#include <dxgi1_2.h>
 +#include <d3dcompiler.h>
 +#include <stdio.h>
 +#include <stdint.h>
@@ -11751,6 +11935,16 @@ index 0000000..6661d60
 +static int present_draw(const uint32_t *pixels, int gamma);
 +
 +static uint64_t s_present_at_ns;   /* gpu_present_frame_at: hand over at this time */
++/* Where the last present's time went, ms: the frame-latency wait, the
++ * upload and draw, the wait for its aimed time, the Present call. */
++static double s_step_ms[5];   /* [4]: a shared frame's keyed-mutex wait */
++
++void gpu_present_last_steps(double out[5])
++{
++    int i;
++    for (i = 0; i < 5; i++)
++        out[i] = s_step_ms[i];
++}
 +
 +uint64_t gpu_present_now_ns(void)
 +{
@@ -11876,17 +12070,33 @@ index 0000000..6661d60
 +/* Returns 0 when nothing was shown: the window is occluded or the display
 + * is off, and Present does not wait for vsync then -- the caller must pace
 + * itself instead of spinning. */
-+static int present_draw(const uint32_t *pixels, int gamma)
++/* The overlay box for the next draw (the F3 counter on a shared frame):
++ * pixels, size and place in frame pixels; 0 x 0 = none. */
++static ID3D11Texture2D          *s_ovl_tex;
++static ID3D11ShaderResourceView *s_ovl_srv;
++static uint32_t                  s_ovl_cap_w, s_ovl_cap_h;
++static const uint32_t           *s_ovl_px;
++static uint32_t                  s_ovl_w, s_ovl_h, s_ovl_x, s_ovl_y;
++
++/* Draw srv (a w x h frame) letterboxed into the back buffer, the overlay
++ * box over it, then wait for the aimed time and present. pixels, when not
++ * NULL, are uploaded into srv's texture (s_frame) first. */
++static int present_srv(ID3D11ShaderResourceView *srv, uint32_t w, uint32_t h,
++                       const uint32_t *pixels, int gamma)
 +{
 +    static const float black[4] = {0, 0, 0, 1};
 +    D3D11_VIEWPORT vp;
 +    uint32_t cw, ch;
-+    float sx, sy;
++    float sx, sy, sc;
++    uint64_t t0, t1, t2, t3;
 +
-+    if (!s_rtv || !pixels)
++    if (!s_rtv || !srv)
 +        return 0;
++    t0 = gpu_present_now_ns();
 +    if (s_latency)
 +        WaitForSingleObjectEx(s_latency, 100, TRUE);
++    t1 = gpu_present_now_ns();
++    s_step_ms[0] = (double)(t1 - t0) / 1e6;
 +    client_size(&cw, &ch);
 +    if (cw != s_bw || ch != s_bh) {
 +        /* The window was resized (or went fullscreen): a back buffer its size. */
@@ -11898,15 +12108,17 @@ index 0000000..6661d60
 +            return 0;
 +        s_bw = cw; s_bh = ch;
 +    }
-+    ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_frame, 0, NULL,
-+                                          pixels, s_w * 4, 0);
++    if (pixels)
++        ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_frame, 0, NULL,
++                                              pixels, w * 4, 0);
 +    ID3D11DeviceContext_OMSetRenderTargets(s_ctx, 1, &s_rtv, NULL);
 +    ID3D11DeviceContext_ClearRenderTargetView(s_ctx, s_rtv, black);
 +    /* The largest rectangle of the frame's shape that fits, centred. */
-+    sx = (float)s_bw / (float)s_w;
-+    sy = (float)s_bh / (float)s_h;
-+    vp.Width = (float)s_w * (sx < sy ? sx : sy);
-+    vp.Height = (float)s_h * (sx < sy ? sx : sy);
++    sx = (float)s_bw / (float)w;
++    sy = (float)s_bh / (float)h;
++    sc = sx < sy ? sx : sy;
++    vp.Width = (float)w * sc;
++    vp.Height = (float)h * sc;
 +    vp.TopLeftX = ((float)s_bw - vp.Width) * 0.5f;
 +    vp.TopLeftY = ((float)s_bh - vp.Height) * 0.5f;
 +    vp.MinDepth = 0; vp.MaxDepth = 1;
@@ -11916,17 +12128,202 @@ index 0000000..6661d60
 +    ID3D11DeviceContext_VSSetShader(s_ctx, s_vs, NULL, 0);
 +    ID3D11DeviceContext_PSSetShader(s_ctx, gamma ? s_ps_gamma : s_ps, NULL, 0);
 +    {
-+        ID3D11ShaderResourceView *v[2] = {s_srv, s_lut_srv};
++        ID3D11ShaderResourceView *v[2] = {srv, s_lut_srv};
 +        ID3D11DeviceContext_PSSetShaderResources(s_ctx, 0, gamma ? 2 : 1, v);
 +    }
 +    ID3D11DeviceContext_PSSetSamplers(s_ctx, 0, 1, &s_samp);
 +    ID3D11DeviceContext_Draw(s_ctx, 3, 0);
++    if (s_ovl_px && s_ovl_w && s_ovl_h) {
++        /* The overlay box, at its place in the frame, scaled as the frame is. */
++        if (s_ovl_w > s_ovl_cap_w || s_ovl_h > s_ovl_cap_h) {
++            D3D11_TEXTURE2D_DESC td;
++            if (s_ovl_srv) { ID3D11ShaderResourceView_Release(s_ovl_srv); s_ovl_srv = NULL; }
++            if (s_ovl_tex) { ID3D11Texture2D_Release(s_ovl_tex); s_ovl_tex = NULL; }
++            ZeroMemory(&td, sizeof td);
++            td.Width = s_ovl_w; td.Height = s_ovl_h; td.MipLevels = 1; td.ArraySize = 1;
++            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
++            td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
++            s_ovl_cap_w = s_ovl_cap_h = 0;
++            if (SUCCEEDED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &s_ovl_tex))
++                && SUCCEEDED(ID3D11Device_CreateShaderResourceView(s_dev, (ID3D11Resource *)s_ovl_tex,
++                                                                   NULL, &s_ovl_srv))) {
++                s_ovl_cap_w = s_ovl_w; s_ovl_cap_h = s_ovl_h;
++            }
++        }
++        if (s_ovl_srv) {
++            D3D11_BOX box = {0, 0, 0, s_ovl_w, s_ovl_h, 1};
++            D3D11_VIEWPORT ov = vp;
++            ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_ovl_tex, 0, &box,
++                                                  s_ovl_px, s_ovl_w * 4, 0);
++            ov.TopLeftX = vp.TopLeftX + (float)s_ovl_x * sc;
++            ov.TopLeftY = vp.TopLeftY + (float)s_ovl_y * sc;
++            ov.Width = (float)s_ovl_cap_w * sc;
++            ov.Height = (float)s_ovl_cap_h * sc;
++            ID3D11DeviceContext_RSSetViewports(s_ctx, 1, &ov);
++            ID3D11DeviceContext_PSSetShader(s_ctx, s_ps, NULL, 0);
++            ID3D11DeviceContext_PSSetShaderResources(s_ctx, 0, 1, &s_ovl_srv);
++            ID3D11DeviceContext_Draw(s_ctx, 3, 0);
++        }
++    }
 +    if (s_capture_pending && InterlockedExchange(&s_capture_pending, 0))
 +        capture_back_buffer();
++    t2 = gpu_present_now_ns();
++    s_step_ms[1] = (double)(t2 - t1) / 1e6;
 +    if (s_present_at_ns)
 +        wait_until_ns(s_present_at_ns);
-+    return IDXGISwapChain_Present(s_chain, (UINT)s_vsync,
-+                                  !s_vsync && s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0) == S_OK;
++    t3 = gpu_present_now_ns();
++    s_step_ms[2] = (double)(t3 - t2) / 1e6;
++    {
++        int ok = IDXGISwapChain_Present(s_chain, (UINT)s_vsync,
++                                        !s_vsync && s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0) == S_OK;
++        s_step_ms[3] = (double)(gpu_present_now_ns() - t3) / 1e6;
++        return ok;
++    }
++}
++
++/* ---- Frames shared with the Vulkan renderer (no CPU copies) ----
++ *
++ * The renderer used to read each full-resolution frame back to the CPU, the
++ * window thread copied it, and this file uploaded it again: 33 MB three
++ * times a frame at 4K, 9-14 ms of upload alone, so presents came late and a
++ * VRR display held frames 25-45 ms. Now four textures made here are shared
++ * with the renderer (NT handles, a keyed mutex each): it copies each
++ * finished frame into the next one on the GPU and the presenter draws from
++ * it. The keyed mutex is the hand-over: the renderer takes key 0 and gives
++ * back key 1, the presenter takes key 1 and gives back key 0; a published
++ * frame the presenter skips is retired (taken and given back) so the
++ * renderer can have it again. */
++#define SH_N 4
++static ID3D11Texture2D          *s_sh_tex[SH_N];
++static ID3D11ShaderResourceView *s_sh_srv[SH_N];
++static IDXGIKeyedMutex          *s_sh_km[SH_N];
++static HANDLE                    s_sh_handle[SH_N];
++static uint32_t                  s_sh_w, s_sh_h;
++static SRWLOCK                   s_sh_lock = SRWLOCK_INIT;
++
++static void shared_free(void)
++{
++    int i;
++    for (i = 0; i < SH_N; i++) {
++        if (s_sh_km[i])     { IDXGIKeyedMutex_Release(s_sh_km[i]);          s_sh_km[i] = NULL; }
++        if (s_sh_srv[i])    { ID3D11ShaderResourceView_Release(s_sh_srv[i]); s_sh_srv[i] = NULL; }
++        if (s_sh_tex[i])    { ID3D11Texture2D_Release(s_sh_tex[i]);          s_sh_tex[i] = NULL; }
++        if (s_sh_handle[i]) { CloseHandle(s_sh_handle[i]);                   s_sh_handle[i] = NULL; }
++    }
++    s_sh_w = s_sh_h = 0;
++}
++
++int gpu_present_shared_make(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8])
++{
++    D3D11_TEXTURE2D_DESC td;
++    IDXGIDevice *dd = NULL;
++    IDXGIAdapter *ad = NULL;
++    DXGI_ADAPTER_DESC desc;
++    int i, ok = 1;
++    if (!s_dev || !s_flip || !w || !h)
++        return 0;
++    if (FAILED(ID3D11Device_QueryInterface(s_dev, &IID_IDXGIDevice, (void **)&dd))
++        || FAILED(IDXGIDevice_GetAdapter(dd, &ad)) || FAILED(IDXGIAdapter_GetDesc(ad, &desc))) {
++        if (ad) IDXGIAdapter_Release(ad);
++        if (dd) IDXGIDevice_Release(dd);
++        return 0;
++    }
++    memcpy(luid, &desc.AdapterLuid, 8);
++    IDXGIAdapter_Release(ad);
++    IDXGIDevice_Release(dd);
++    AcquireSRWLockExclusive(&s_sh_lock);
++    shared_free();
++    ZeroMemory(&td, sizeof td);
++    td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
++    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
++    td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
++    td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++    for (i = 0; i < SH_N && ok; i++) {
++        IDXGIResource1 *r1 = NULL;
++        ok = SUCCEEDED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &s_sh_tex[i]))
++          && SUCCEEDED(ID3D11Device_CreateShaderResourceView(s_dev, (ID3D11Resource *)s_sh_tex[i],
++                                                             NULL, &s_sh_srv[i]))
++          && SUCCEEDED(ID3D11Texture2D_QueryInterface(s_sh_tex[i], &IID_IDXGIKeyedMutex,
++                                                      (void **)&s_sh_km[i]))
++          && SUCCEEDED(ID3D11Texture2D_QueryInterface(s_sh_tex[i], &IID_IDXGIResource1,
++                                                      (void **)&r1))
++          && SUCCEEDED(IDXGIResource1_CreateSharedHandle(r1, NULL,
++                                                         DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
++                                                         NULL, &s_sh_handle[i]));
++        if (r1)
++            IDXGIResource1_Release(r1);
++        handles[i] = ok ? s_sh_handle[i] : NULL;
++    }
++    if (ok) {
++        s_sh_w = w; s_sh_h = h;
++    } else {
++        shared_free();
++        fprintf(stderr, "  [D3D] shared frame textures failed; frames are copied through the CPU\n");
++    }
++    ReleaseSRWLockExclusive(&s_sh_lock);
++    return ok ? SH_N : 0;
++}
++
++/* Present shared frame i (w x h), the title's gamma ramp applied when gamma,
++ * at at_ns (0 = at once). 0: not shown (the hand-over timed out, occluded). */
++int gpu_present_shared_at(int i, uint32_t w, uint32_t h, int gamma, uint64_t at_ns)
++{
++    int ok = 0;
++    if (i < 0 || i >= SH_N)
++        return 0;
++    if (gamma && s_ps_gamma) {
++        extern unsigned xbox_FramebufferGammaSerial(void);
++        extern unsigned xbox_FramebufferGammaTexels(uint32_t *out256);
++        if (xbox_FramebufferGammaSerial() != s_lut_serial) {
++            uint32_t t[256];
++            s_lut_serial = xbox_FramebufferGammaTexels(t);
++            ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_lut, 0, NULL, t, 1024, 0);
++        }
++    }
++    AcquireSRWLockShared(&s_sh_lock);
++    {
++        uint64_t k0 = gpu_present_now_ns();
++        int got = s_sh_km[i] && w == s_sh_w && h == s_sh_h
++                  && IDXGIKeyedMutex_AcquireSync(s_sh_km[i], 1, 100) == S_OK;
++        s_step_ms[4] = (double)(gpu_present_now_ns() - k0) / 1e6;
++        if (!got) {
++            ReleaseSRWLockShared(&s_sh_lock);
++            return 0;
++        }
++    }
++    {
++        s_present_at_ns = at_ns;
++        ok = present_srv(s_sh_srv[i], w, h, NULL, gamma && s_ps_gamma);
++        s_present_at_ns = 0;
++        IDXGIKeyedMutex_ReleaseSync(s_sh_km[i], 0);
++    }
++    ReleaseSRWLockShared(&s_sh_lock);
++    return ok;
++}
++
++/* A published frame the presenter will not show: hand it back. */
++void gpu_present_shared_retire(int i)
++{
++    if (i < 0 || i >= SH_N)
++        return;
++    AcquireSRWLockShared(&s_sh_lock);
++    if (s_sh_km[i] && IDXGIKeyedMutex_AcquireSync(s_sh_km[i], 1, 100) == S_OK)
++        IDXGIKeyedMutex_ReleaseSync(s_sh_km[i], 0);
++    ReleaseSRWLockShared(&s_sh_lock);
++}
++
++/* The overlay box drawn over the next frames (frame pixels; NULL = none).
++ * The pixels must stay valid until the next call. */
++void gpu_present_overlay(const uint32_t *px, uint32_t w, uint32_t h, uint32_t x, uint32_t y)
++{
++    s_ovl_px = px; s_ovl_w = w; s_ovl_h = h; s_ovl_x = x; s_ovl_y = y;
++}
++
++static int present_draw(const uint32_t *pixels, int gamma)
++{
++    if (!pixels)
++        return 0;
++    return present_srv(s_srv, s_w, s_h, pixels, gamma);
 +}
 +
 +void gpu_present_shutdown(void)
@@ -11940,6 +12337,9 @@ index 0000000..6661d60
 +    if (s_srv)   { ID3D11ShaderResourceView_Release(s_srv);   s_srv = NULL; }
 +    if (s_frame) { ID3D11Texture2D_Release(s_frame);          s_frame = NULL; }
 +    if (s_rtv)   { ID3D11RenderTargetView_Release(s_rtv);     s_rtv = NULL; }
++    shared_free();
++    if (s_ovl_srv) { ID3D11ShaderResourceView_Release(s_ovl_srv); s_ovl_srv = NULL; }
++    if (s_ovl_tex) { ID3D11Texture2D_Release(s_ovl_tex); s_ovl_tex = NULL; }
 +    if (s_latency) { CloseHandle(s_latency);                  s_latency = NULL; }
 +    if (s_chain) { IDXGISwapChain_Release(s_chain);           s_chain = NULL; }
 +    if (s_ctx)   { ID3D11DeviceContext_Release(s_ctx);        s_ctx = NULL; }
@@ -11953,10 +12353,10 @@ index 0000000..6661d60
 +#endif
 diff --git a/src/video/gpu_present.h b/src/video/gpu_present.h
 new file mode 100644
-index 0000000..aa7224d
+index 0000000..eed8e50
 --- /dev/null
 +++ b/src/video/gpu_present.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,33 @@
 +/* D3D11 presentation for the framebuffer window (see gpu_present.c). */
 +#ifndef XBOX_GPU_PRESENT_H
 +#define XBOX_GPU_PRESENT_H
@@ -11979,7 +12379,15 @@ index 0000000..aa7224d
 +/* The last frame on the glass (flip model): its present count and when. 0 = unknown. */
 +int  gpu_present_glass(uint32_t *present_count, uint64_t *glass_ns);
 +int  gpu_present_flip_model(void);
-+uint32_t gpu_present_last_count(void);   /* the swap chain's last present */
++uint32_t gpu_present_last_count(void);
++/* The last present: latency wait, upload+draw, wait for its time, Present (ms). */
++void gpu_present_last_steps(double out[5]);
++/* Frames shared with the renderer (see gpu_present.c): make four w x h
++ * textures, their NT handles and this device's adapter LUID; 4 or 0. */
++int  gpu_present_shared_make(uint32_t w, uint32_t h, void *handles[4], uint8_t luid[8]);
++int  gpu_present_shared_at(int i, uint32_t w, uint32_t h, int gamma, uint64_t at_ns);
++void gpu_present_shared_retire(int i);
++void gpu_present_overlay(const uint32_t *px, uint32_t w, uint32_t h, uint32_t x, uint32_t y);   /* the swap chain's last present */
 +#endif
 +#endif
 diff --git a/src/video/vbl_fifo.h b/src/video/vbl_fifo.h
@@ -12406,10 +12814,10 @@ index 0000000..9b52332
 +add_test(NAME present_cadence_test COMMAND present_cadence_test)
 diff --git a/tests/present_cadence/test_main.c b/tests/present_cadence/test_main.c
 new file mode 100644
-index 0000000..57155d2
+index 0000000..489aec7
 --- /dev/null
 +++ b/tests/present_cadence/test_main.c
-@@ -0,0 +1,519 @@
+@@ -0,0 +1,540 @@
 +/* Ported from xenophobentx/xboxrecomp (branch takedawn, MIT), 2026-10-26.
 + *
 + * present_cadence.c (BO-115): the strategy per display, where a present is
@@ -12436,6 +12844,10 @@ index 0000000..57155d2
 + *              display with small and with large jitter, 30 fps content, a
 + *              frame the presenter skipped, a window that shows nothing, the
 + *              vblank-to-glass latency, the simulation steps.
++ *   queue      a frame waiting behind another is kept while the newer one's
++ *              own time is still ahead (timed with a lead over a refresh:
++ *              dropping it showed every other frame, 33 ms gaps) and given up
++ *              once that time has come; legacy shows the newest only.
 + */
 +#include "present_cadence.h"
 +
@@ -12919,6 +13331,22 @@ index 0000000..57155d2
 +    check(r.samples == 200 && r.expected == 0, "no display: intervals in ms only");
 +}
 +
++static void queue(void)
++{
++    pc_pacer p;
++    pc_display d;
++    uint64_t now = 1000 * MS;
++    memset(&d, 0, sizeof d);
++    d.refresh_hz = 144.0; d.vrr = 1; d.min_hz = 48.0;
++    pc_pacer_init(&p, PC_TIMED, &d, 5 * MS, 20 * MS, 1);
++    check(!pc_pacer_skip(&p, now - 5 * MS, now), "timed, lead 20: newer frame due in 15 ms, older kept");
++    check(pc_pacer_skip(&p, now - 25 * MS, now), "timed, lead 20: newer frame already due, older dropped");
++    check(pc_pacer_skip(&p, now - 20 * MS, now), "timed: newer frame due right now, older dropped");
++    pc_pacer_init(&p, PC_LEGACY, &d, 5 * MS, 20 * MS, 1);
++    check(pc_pacer_skip(&p, now - 1 * MS, now), "legacy: newest only");
++    check(pc_pacer_skip(&p, 0, now), "no vblank for the newer frame: newest only");
++}
++
 +int main(void)
 +{
 +    strategy();
@@ -12926,6 +13354,7 @@ index 0000000..57155d2
 +    handover();
 +    timed();
 +    statistics();
++    queue();
 +    printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);
 +    return failures != 0;
 +}

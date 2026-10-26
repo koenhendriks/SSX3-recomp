@@ -19,6 +19,7 @@
 #include "scene_frag_ms_spv.h"
 #ifdef _WIN32
 #include <windows.h>
+#include <vulkan/vulkan_win32.h>
 #define strtok_r strtok_s
 #else
 #include <time.h>
@@ -88,6 +89,9 @@ typedef struct {
     int qreset;
     uint32_t npass;                 /* render passes begun in the frame */
     struct VkrProfDraw *meta;
+    int sh_tex;                     /* the shared texture the frame was copied into; -1 none */
+    uint32_t sh_w, sh_h;
+    double submit_ms;               /* when the frame was submitted (RECOMP_FRAME_STATS) */
 } VkrFrame;
 
 /* What a profiled draw was (RECOMP_VKR_GPUPROF). */
@@ -98,7 +102,20 @@ typedef struct VkrProfDraw {
 } VkrProfDraw;
 #define VKR_PROF_MAX 8192
 
+#define VKR_SHARED 4
 struct VkrContext {
+    /* Frames shared with the window's D3D11 presenter (Windows, see
+     * gpu_present.c): the finished frame is copied into one of these on the
+     * GPU instead of being read back for the CPU to copy and upload. */
+    int sh_ext;                     /* external memory win32 + keyed mutex enabled */
+    uint8_t luid[8];
+    int luid_ok;
+    VkImage sh_img[VKR_SHARED];
+    VkDeviceMemory sh_mem[VKR_SHARED];
+    uint32_t sh_w, sh_h;
+    int sh_n, sh_next;
+    int sh_off;                     /* this submit must not use them (vkr_read_back) */
+    int want_full;                  /* read the full image back as well (recording, tests) */
     VkInstance inst;
     VkPhysicalDevice phys;
     VkDevice dev;
@@ -1147,6 +1164,36 @@ VkrContext *vkr_create(void)
     f14.pushDescriptor = VK_TRUE;
     f13.pNext = &f14;
     di.pNext = &f13; di.queueCreateInfoCount = 1; di.pQueueCreateInfos = &qi;
+#ifdef _WIN32
+    {
+        /* The two extensions frame sharing needs (RECOMP_PRESENT_SHARED=0:
+         * not even asked for), and the device's LUID, to check that the
+         * window's D3D11 device is on the same GPU. */
+        static const char *want[2] = {VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+                                      VK_KHR_WIN32_KEYED_MUTEX_EXTENSION_NAME};
+        static VkExtensionProperties ep[1024];
+        uint32_t ne = 1024, k, have = 0;
+        const char *e = getenv("RECOMP_PRESENT_SHARED");
+        VkPhysicalDeviceIDProperties idp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        if (!(e && e[0] == '0') && vkEnumerateDeviceExtensionProperties(c->phys, NULL, &ne, ep) >= 0) {
+            for (k = 0; k < ne; k++)
+                if (!strcmp(ep[k].extensionName, want[0]) || !strcmp(ep[k].extensionName, want[1]))
+                    have++;
+            if (have == 2) {
+                di.enabledExtensionCount = 2;
+                di.ppEnabledExtensionNames = want;
+                c->sh_ext = 1;
+            }
+        }
+        p2.pNext = &idp;
+        vkGetPhysicalDeviceProperties2(c->phys, &p2);
+        if (idp.deviceLUIDValid) {
+            memcpy(c->luid, idp.deviceLUID, 8);
+            c->luid_ok = 1;
+        }
+    }
+#endif
     if (vkCreateDevice(c->phys, &di, NULL, &c->dev) != VK_SUCCESS) goto fail;
     vkGetDeviceQueue(c->dev, c->qfam, 0, &c->queue);
     pci.queueFamilyIndex = c->qfam;
@@ -2662,6 +2709,151 @@ void vkr_scene_run(VkrContext *c)
     c->scene_done = 1;
 }
 
+/* ---- Shared frames (Windows) ---- */
+static void shared_free(VkrContext *c)
+{
+    int i;
+    for (i = 0; i < c->sh_n; i++) {
+        if (c->sh_img[i]) vkDestroyImage(c->dev, c->sh_img[i], NULL);
+        if (c->sh_mem[i]) vkFreeMemory(c->dev, c->sh_mem[i], NULL);
+        c->sh_img[i] = VK_NULL_HANDLE;
+        c->sh_mem[i] = VK_NULL_HANDLE;
+    }
+    c->sh_n = 0;
+    c->sh_w = c->sh_h = 0;
+}
+
+int vkr_shared_wanted(VkrContext *c, uint32_t *w, uint32_t *h, uint8_t luid[8])
+{
+    if (!c->sh_ext || !c->luid_ok || (c->scale == 1.0f && c->scale_x == 1.0f))
+        return 0;
+    *w = c->sw; *h = c->sh;
+    memcpy(luid, c->luid, 8);
+    return c->sh_n == 0 || c->sh_w != c->sw || c->sh_h != c->sh;
+}
+
+/* Import the presenter's four textures (NT handles of D3D11 textures with a
+ * keyed mutex each), w x h. 1 on success; 0 leaves sharing off. */
+int vkr_shared_import(VkrContext *c, void *const handles[VKR_SHARED], uint32_t w, uint32_t h,
+                      const uint8_t luid[8])
+{
+#ifdef _WIN32
+    PFN_vkGetMemoryWin32HandlePropertiesKHR props_fn =
+        (PFN_vkGetMemoryWin32HandlePropertiesKHR)vkGetDeviceProcAddr(c->dev,
+                                                                     "vkGetMemoryWin32HandlePropertiesKHR");
+    int i;
+    vkDeviceWaitIdle(c->dev);
+    shared_free(c);
+    if (!c->sh_ext || !props_fn || memcmp(luid, c->luid, 8)) {
+        if (memcmp(luid, c->luid, 8))
+            fprintf(stderr, "[VKR] the window's D3D11 device is on another GPU: frames are copied through the CPU\n");
+        return 0;
+    }
+    for (i = 0; i < VKR_SHARED; i++) {
+        VkExternalMemoryImageCreateInfo emi = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        VkMemoryWin32HandlePropertiesKHR hp = {VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
+        VkImportMemoryWin32HandleInfoKHR imp = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
+        VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        VkMemoryRequirements mr;
+        uint32_t t, bits;
+        emi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+        ii.pNext = &emi;
+        ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_B8G8R8A8_UNORM;
+        ii.extent.width = w; ii.extent.height = h; ii.extent.depth = 1;
+        ii.mipLevels = 1; ii.arrayLayers = 1; ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(c->dev, &ii, NULL, &c->sh_img[i]) != VK_SUCCESS)
+            goto fail;
+        c->sh_n = i + 1;
+        vkGetImageMemoryRequirements(c->dev, c->sh_img[i], &mr);
+        if (props_fn(c->dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT, (HANDLE)handles[i], &hp)
+            != VK_SUCCESS)
+            goto fail;
+        bits = mr.memoryTypeBits & hp.memoryTypeBits;
+        for (t = 0; t < c->mem.memoryTypeCount && !(bits & (1u << t)); t++)
+            ;
+        if (t == c->mem.memoryTypeCount)
+            goto fail;
+        imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+        imp.handle = (HANDLE)handles[i];
+        ded.image = c->sh_img[i];
+        imp.pNext = &ded;
+        ai.pNext = &imp;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = t;
+        if (vkAllocateMemory(c->dev, &ai, NULL, &c->sh_mem[i]) != VK_SUCCESS
+            || vkBindImageMemory(c->dev, c->sh_img[i], c->sh_mem[i], 0) != VK_SUCCESS)
+            goto fail;
+    }
+    c->sh_w = w; c->sh_h = h; c->sh_next = 0;
+    fprintf(stderr, "[VKR] frames shared with the window (%ux%u, %d textures): no CPU copies\n",
+            w, h, VKR_SHARED);
+    return 1;
+fail:
+    fprintf(stderr, "[VKR] importing the window's frame textures failed: frames are copied through the CPU\n");
+    shared_free(c);
+    c->sh_ext = 0;                          /* do not try again */
+    return 0;
+#else
+    (void)c; (void)handles; (void)w; (void)h; (void)luid;
+    return 0;
+#endif
+}
+
+void vkr_want_full(VkrContext *c, int on)
+{
+    c->want_full = on;
+}
+
+/* The shared texture frame slot's image went into (its size in *w, *h), or -1. */
+int vkr_frame_shared(VkrContext *c, int slot, uint32_t *w, uint32_t *h)
+{
+    *w = c->fr[slot].sh_w; *h = c->fr[slot].sh_h;
+    return c->fr[slot].sh_tex;
+}
+
+/* Copy src (TRANSFER_SRC_OPTIMAL, sw x sh) into the next shared texture.
+ * 1 when done; the submit then takes the texture's keyed mutex. */
+static int shared_copy(VkrContext *c, int slot, VkImage src)
+{
+    VkImageCopy ic = {0};
+    VkImageMemoryBarrier2 b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    VkDependencyInfo di = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    int t = c->sh_next;
+    if (!c->sh_n || c->sh_off || c->sh_w != c->sw || c->sh_h != c->sh)
+        return 0;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1; b.subresourceRange.layerCount = 1;
+    b.image = c->sh_img[t];
+    /* From the presenter (the external queue family); its contents are not kept. */
+    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT; b.srcAccessMask = 0;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT; b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL; b.dstQueueFamilyIndex = c->qfam;
+    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(c->cmd, &di);
+    ic.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; ic.srcSubresource.layerCount = 1;
+    ic.dstSubresource = ic.srcSubresource;
+    ic.extent.width = c->sw; ic.extent.height = c->sh; ic.extent.depth = 1;
+    vkCmdCopyImage(c->cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   c->sh_img[t], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
+    /* To the presenter. */
+    b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT; b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT; b.dstAccessMask = 0;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.srcQueueFamilyIndex = c->qfam; b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+    vkCmdPipelineBarrier2(c->cmd, &di);
+    c->fr[slot].sh_tex = t;
+    c->fr[slot].sh_w = c->sw; c->fr[slot].sh_h = c->sh;
+    c->sh_next = (t + 1) % VKR_SHARED;
+    return 1;
+}
+
 int vkr_flip_submit(VkrContext *c)
 {
     VkBufferImageCopy cp = {0};
@@ -2713,23 +2905,28 @@ int vkr_flip_submit(VkrContext *c)
     cp.imageSubresource.layerCount = 1;
     cp.imageExtent.depth = 1;
     c->fr[slot].rbh_w = c->fr[slot].rbh_h = 0;
+    c->fr[slot].sh_tex = -1;
     if (c->scale == 1.0f && c->scale_x == 1.0f) {
         cp.imageExtent.width = c->w; cp.imageExtent.height = c->h;
         vkCmdCopyImageToBuffer(c->cmd, frame, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                c->fr[slot].rb, 1, &cp);
     } else {
-        c->fr[slot].rbh_w = c->sw; c->fr[slot].rbh_h = c->sh;
         /* The full image for the presenter, and a filtered guest-size copy
-         * for guest memory (what the title and the screenshots read). */
+         * for guest memory (what the title and the screenshots read). The
+         * full image goes to a shared texture on the GPU when there is one,
+         * else it is read back for the CPU path. */
         VkImageBlit bl = {0};
+        VkImage out = frame;
         cp.imageExtent.width = c->sw; cp.imageExtent.height = c->sh;
         if (c->crt_in) {
             crt_pass(c, frame);
-            vkCmdCopyImageToBuffer(c->cmd, c->crt_out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            out = c->crt_out;
+        }
+        if (!shared_copy(c, slot, out) || c->want_full) {
+            c->fr[slot].rbh_w = c->sw; c->fr[slot].rbh_h = c->sh;
+            vkCmdCopyImageToBuffer(c->cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    c->fr[slot].rbh, 1, &cp);
-        } else
-            vkCmdCopyImageToBuffer(c->cmd, frame, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   c->fr[slot].rbh, 1, &cp);
+        }
         barrier(c, c->down, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -2757,6 +2954,21 @@ int vkr_flip_submit(VkrContext *c)
     CK_FRAME(vkEndCommandBuffer(c->cmd), return -1);
     c->recording = 0;
     si.commandBufferCount = 1; si.pCommandBuffers = &c->cmd;
+#ifdef _WIN32
+    /* The shared texture's hand-over: take key 0 (the presenter gave it
+     * back), give key 1 (for the presenter). */
+    VkWin32KeyedMutexAcquireReleaseInfoKHR km = {VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR};
+    uint64_t key0 = 0, key1 = 1;
+    uint32_t timeout = 100;
+    if (c->fr[slot].sh_tex >= 0) {
+        km.acquireCount = 1; km.pAcquireSyncs = &c->sh_mem[c->fr[slot].sh_tex];
+        km.pAcquireKeys = &key0; km.pAcquireTimeouts = &timeout;
+        km.releaseCount = 1; km.pReleaseSyncs = &c->sh_mem[c->fr[slot].sh_tex];
+        km.pReleaseKeys = &key1;
+        si.pNext = &km;
+    }
+#endif
+    c->fr[slot].submit_ms = vkr_now_ms();
     CK_FRAME(vkQueueSubmit(c->queue, 1, &si, c->fence), return -1);
     pthread_mutex_lock(&c->lock);
     c->fr[slot].busy = 1;
@@ -2780,6 +2992,25 @@ const uint8_t *vkr_frame_pixels(VkrContext *c, int slot)
 {
     CK_FRAME(vkWaitForFences(c->dev, 1, &c->fr[slot].fence, VK_TRUE, UINT64_MAX), return NULL);
     prof_report(c, slot);
+    {
+        /* Submit to done, the second's worst (RECOMP_FRAME_STATS): a frame
+         * copied into a shared texture also waits there for the window to
+         * hand that texture back. */
+        static double worst, since;
+        static int stats = -1;
+        double now = vkr_now_ms(), d = now - c->fr[slot].submit_ms;
+        if (stats < 0)
+            stats = getenv("RECOMP_FRAME_STATS") != NULL;
+        if (stats && c->fr[slot].submit_ms > 0.0) {
+            if (d > worst) worst = d;
+            if (now - since >= 1000.0) {
+                fprintf(stderr, "[VKR] submit->done worst %.1f ms%s\n", worst,
+                        c->sh_n ? " (shared frames)" : "");
+                worst = 0.0;
+                since = now;
+            }
+        }
+    }
     if (c->fr[slot].rb_noncoherent) {
         VkMappedMemoryRange mr = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
         mr.memory = c->fr[slot].rb_mem; mr.offset = 0; mr.size = VK_WHOLE_SIZE;
@@ -2813,7 +3044,10 @@ void vkr_frame_release(VkrContext *c, int slot)
 
 int vkr_read_back(VkrContext *c, uint8_t *out)
 {
-    int slot = vkr_flip_submit(c);
+    int slot;
+    c->sh_off = 1;                      /* nothing publishes this frame: no shared texture */
+    slot = vkr_flip_submit(c);
+    c->sh_off = 0;
     const uint8_t *px = slot < 0 ? NULL : vkr_frame_pixels(c, slot);
     if (px)
         memcpy(out, px, (size_t)c->w * c->h * 4);
