@@ -993,6 +993,16 @@ static HudGroup s_hud_groups[HUD_MAX_BOXES];   /* last frame's elements */
 static int      s_hud_ngroups;
 static int      s_hud_trace = -1, s_hud_trace_frame, s_hud_order;
 static int      s_hud_menu;                    /* a menu was up this frame */
+/* Menu or not, decided once per frame at the flip before it (be_flip), not
+ * per draw. This runs on the GPU executor, frames behind the game, and read
+ * the game's screen state live: a menu opening mid-frame, or a screen's
+ * state word read while the game changed it (briefing 4 -> 5), split one
+ * frame into half menu layout, half HUD layout -- a flicker as the briefing
+ * and the end-of-race menus came up. Held HUD_MENU_HOLD frames after the
+ * menu was last seen, so its closing frames (still in flight) and a stray
+ * read keep the middle. -1: not decided yet (the first frame). */
+#define HUD_MENU_HOLD 30
+static int      s_hud_frame_menu = -1, s_hud_menu_hold;
 static double   s_hud_trace_t;
 
 /* The layout runs in widescreen in game; with a menu up its pieces are still
@@ -1232,7 +1242,7 @@ static float hud_shift(const Nv2aVshOutput *v, uint32_t n)
     int g, menu;
     if (!n || !hud_edges_on())
         return 0.0f;
-    menu = ssx3_InGameMenuUp();
+    menu = s_hud_frame_menu >= 0 ? s_hud_frame_menu : ssx3_InGameMenuUp();
     s_hud_menu |= menu;
     for (i = 0; i < n; i++) {
         if (v[i].pos[3] != 1.0f)
@@ -2266,6 +2276,11 @@ static void be_flip(const Nv2aTarget *t)
     if (s_hud_trace < 0)
         s_hud_trace = getenv("RECOMP_HUD_TRACE") ? atoi(getenv("RECOMP_HUD_TRACE")) : 0;
     hud_build_groups();                 /* this frame's elements, for the next */
+    if (ssx3_InGameMenuUp())
+        s_hud_menu_hold = HUD_MENU_HOLD;
+    else if (s_hud_menu_hold > 0)
+        s_hud_menu_hold--;
+    s_hud_frame_menu = s_hud_menu_hold > 0;
     s_spike_frame++;
     s_hud_order = 0;
     if (s_hud_trace_frame)
