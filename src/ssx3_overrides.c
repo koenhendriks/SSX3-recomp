@@ -9,8 +9,8 @@
  * the way recomp_manual.c does: the registers are thread-local, and a plain
  * `extern uint32_t g_eax` names the TLS template, not the running thread's copy.
  */
-#ifdef _WIN32
 #include "log.h"
+#ifdef _WIN32
 #include <windows.h>
 #else
 #include "platform/win32_compat.h"
@@ -2443,6 +2443,33 @@ void sub_0023BA20(void)
 {
     sub_0023BA20_gen();
     xbox_Nv2aSwmHandled();
+}
+
+/*
+ * D3D's vblank DPC (sub_0023B490, thiscall, [this] = the NV2A register
+ * base), wrapped so its acknowledge does not wait on a polling thread. At
+ * 0x0023B540 it writes 1 to PCRTC_INTR_0 and spins until PMC_INTR_0 bit 24
+ * drops. On hardware that write clears it at once; here nv2a_intr_thread
+ * (toolkit) sees the write on its next Sleep(1) poll -- and when Windows
+ * does not wake that thread for a quantum or two, the DPC spins 26-29 ms on
+ * the timer thread holding the guest CPU, and the game stops (17 times in a
+ * 90 s race, CLAUDE.md "FPS DROPS"). The interrupt is already being
+ * serviced, so its PMC bit is cleared before the DPC runs.
+ * RECOMP_VBLANK_FAST_ACK=0 = the old wait.
+ */
+extern void sub_0023B490_gen(void);
+
+void sub_0023B490(void)
+{
+    static int on = -1;
+    uint32_t regs = MEM32(g_ecx);
+    if (on < 0) {
+        const char *e = getenv("RECOMP_VBLANK_FAST_ACK");
+        on = !(e && e[0] == '0');
+    }
+    if (on && regs >= 0xFD000000u && regs < 0xFE000000u)
+        ST32(regs + 0x100, MEM32(regs + 0x100) & ~0x01000000u);
+    sub_0023B490_gen();
 }
 
 /*

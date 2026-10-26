@@ -121,6 +121,7 @@ The launcher's choices are these environment variables:
 | `RECOMP_AUDIO_CHANNELS` | `2` | `6` = 5.1 surround output (the game mixes front, centre and rear speakers; Windows); stereo uses a proper downmix |
 | `RECOMP_MSAA` | `4` | anti-aliasing: `0` off, `2`, `4`, `8` samples (as far as the GPU goes); cut-out edges (trees, fences) are smoothed too |
 | `RECOMP_HDTEX` | `hd-textures` | the HD texture pack (Bl4ckH4nd's, see below) and its `ssx3_map.txt`; `0` = off |
+| `RECOMP_HDTEX_PRELOAD` | `1` | the HD pack is read into memory in the background at start (~170 MB), so a texture seen for the first time does not wait for the disk; `0` = read each file at first use |
 | `RECOMP_FPS30` | `0` | `1` = keep the game's own 30 FPS stretches (split screen, Metro-City's tunnel); by default they render at 60 |
 | `RECOMP_FPS_OVERLAY` | `0` | `1` = start with the FPS counter on (F3 toggles it): game FPS, frames shown, slowest frame; Windows |
 

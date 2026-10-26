@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.20)
+project(hdtex_test C)
+# vkr_hdtex.c on its own: Vulkan and the log are stubbed in test_main.c.
+set(CMAKE_C_STANDARD 11)
+find_package(Threads REQUIRED)
+add_executable(hdtex_test test_main.c ../../src/vk/vkr_hdtex.c)
+target_include_directories(hdtex_test PRIVATE ../../src/vk ../../src)
+target_compile_definitions(hdtex_test PRIVATE VKR_HDTEX_TEST)
+target_link_libraries(hdtex_test PRIVATE Threads::Threads)
+enable_testing()
+add_test(NAME hdtex_test COMMAND hdtex_test)

@@ -40,7 +40,14 @@ static double vkr_now_ms(void)
 #endif
 }
 
-#define VKR_BUF_BYTES (32u << 20)       /* vertex+index staging per frame */
+#define VKR_BUF_BYTES (96u << 20)       /* vertex+index+texture staging per frame */
+/* Texture uploads stop this short of the end: a race start brings ~490 new
+ * textures in one frame, which filled the 32 MB buffer, and every draw
+ * after that failed ("upload buffer full", ~650 times) -- dropped from the
+ * frame. Textures that do not fit wait for the next frame; draws always
+ * have this much. */
+#define VKR_DRAW_RESERVE (16u << 20)
+#define VKR_TEX_LIMIT (VKR_BUF_BYTES - VKR_DRAW_RESERVE)
 #define VKR_FRAMES 2                    /* frames in flight */
 #define VKR_SPEC_WORDS 39               /* xbox.frag SPEC + S0..S37 */
 #define VKR_PIPE_INDEX 8192
@@ -68,6 +75,12 @@ typedef struct {
     VkDeviceMemory rbh_mem;
     uint8_t *rbh_map;
     int rbh_noncoherent;
+    /* What was copied into rbh at the frame's submit: its size, 0 = none
+     * (internal resolution 1x). Read by the flip thread later, when c->sw /
+     * c->sh may already be an offscreen target's (a 512x512 shadow map):
+     * taken from those, the window showed the first 512x512 pixels of the
+     * frame -- a garbled flash every second or two. */
+    uint32_t rbh_w, rbh_h;
     int busy;                       /* submitted, read-back not released yet */
     /* RECOMP_VKR_GPUPROF: a timestamp after every draw of the frame */
     VkQueryPool qp;
@@ -145,6 +158,7 @@ struct VkrContext {
     int32_t *hidx;
     uint32_t hcap;
     uint32_t flip_serial;
+    uint32_t draws_dropped;         /* this frame: no room in the upload buffer */
 
     /* Internal resolution (RECOMP_RES): the target is sw x sh = w x h times
      * scale; positions, the guest's copy and the clip rectangle stay in guest
@@ -848,6 +862,11 @@ static VkPipeline create_pipeline(VkrContext *c, const uint32_t *key)
             fprintf(stderr, "[VKR] pipeline creation failed\n");
             return VK_NULL_HANDLE;
         }
+        /* Debug only: written from the GPU executor, and a race start makes
+         * ~40 pipelines -- their lines went through the log pipe at every
+         * level (the pump drops them below DEBUG) and the executor waited in
+         * those writes, 50-75 ms of a race start's 90 ms frame. */
+        if (log_enabled(LOG_DEBUG))
         fprintf(stderr, "[VKR] pipeline: %.1f ms (blend %u %u/%u eq %u mask %X vsh %u topo %u wdepth %u"
                 " rc %u stages %u)\n", vkr_now_ms() - t0,
                 key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
@@ -1432,6 +1451,16 @@ static int flush_wait(VkrContext *c)
     si.commandBufferCount = 1; si.pCommandBuffers = &c->cmd;
     CK(vkQueueSubmit(c->queue, 1, &si, c->fence));
     CK(vkWaitForFences(c->dev, 1, &c->fence, VK_TRUE, UINT64_MAX));
+    if (c->draws_dropped) {
+        static double said;
+        double now = vkr_now_ms();
+        if (now - said >= 1000.0) {
+            log_msg(LOG_WARN, "VKR", "upload buffer full: %u draws dropped from flip %u",
+                    c->draws_dropped, c->flip_serial);
+            said = now;
+        }
+        c->draws_dropped = 0;
+    }
     c->buf_used = 0;
     c->upload_serial++;
     return 1;
@@ -1818,7 +1847,8 @@ int vkr_offscreen_use(VkrContext *c, uint32_t key, uint32_t w, uint32_t h, float
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-        fprintf(stderr, "[VKR] offscreen target %08X %ux%u on the GPU at %ux%u\n", key, w, h, o->sw, o->sh);
+        if (log_enabled(LOG_DEBUG))    /* the executor: no write at a player's level */
+            fprintf(stderr, "[VKR] offscreen target %08X %ux%u on the GPU at %ux%u\n", key, w, h, o->sw, o->sh);
         c->noff++;
     }
     end_pass(c);
@@ -1914,7 +1944,7 @@ int vkr_tex_update(VkrContext *c, VkrTex *t, uint64_t key, const uint32_t *pixel
 {
     VkBufferImageCopy cp = {0};
     uint32_t off = (c->buf_used + 15) & ~15u, bytes = t->w * t->h * 4;
-    if (off + bytes > VKR_BUF_BYTES || !begin_cmd(c))
+    if (off + bytes > VKR_TEX_LIMIT || !begin_cmd(c))
         return 0;
     end_pass(c);
     memcpy(c->buf_map + off, pixels, bytes);
@@ -1951,6 +1981,11 @@ VkrTex *vkr_tex_create(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
  * levels distant surfaces shimmer and anisotropic filtering has nothing to
  * blend. Not for textures later rewritten with vkr_tex_update. Off with
  * RECOMP_TEX_MIPS=0. */
+/* RECOMP_VKR_STATS: time in vkAllocateMemory for textures (vkr_backend.c's
+ * [VKRSTAT] line takes and clears it once a second). */
+double g_vkr_alloc_ms;
+unsigned g_vkr_allocs;
+
 VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
                           const uint32_t *pixels, int mips)
 {
@@ -1964,7 +1999,7 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     uint32_t off = (c->buf_used + 15) & ~15u, bytes = w * h * 4;
     int m;
 
-    if (!t || !w || !h || off + bytes > VKR_BUF_BYTES) { free(t); return NULL; }
+    if (!t || !w || !h || off + bytes > VKR_TEX_LIMIT) { free(t); return NULL; }
     if (c->tex_mips < 0) {
         const char *e = getenv("RECOMP_TEX_MIPS");
         c->tex_mips = !(e && *e == '0');
@@ -1983,7 +2018,16 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     vkGetImageMemoryRequirements(c->dev, t->img, &mr);
     m = find_mem(c, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     ai.allocationSize = mr.size; ai.memoryTypeIndex = (uint32_t)(m < 0 ? 0 : m);
-    if (vkAllocateMemory(c->dev, &ai, NULL, &t->mem) != VK_SUCCESS) {
+    {
+        double a0 = vkr_now_ms();
+        VkResult ar = vkAllocateMemory(c->dev, &ai, NULL, &t->mem);
+        g_vkr_alloc_ms += vkr_now_ms() - a0;
+        g_vkr_allocs++;
+        if (ar != VK_SUCCESS) {
+            vkDestroyImage(c->dev, t->img, NULL); free(t); return NULL;
+        }
+    }
+    if (0) {
         vkDestroyImage(c->dev, t->img, NULL); free(t); return NULL;
     }
     vkBindImageMemory(c->dev, t->img, t->mem, 0);
@@ -2077,7 +2121,7 @@ VkrTex *vkr_tex_create_bc7(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     size_t pos = 0;
     int m;
 
-    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || off + size > VKR_BUF_BYTES)
+    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || off + size > VKR_TEX_LIMIT)
         return NULL;
     for (l = 0, lw = w, lh = h; l < mips; l++) {       /* the levels fit in data */
         pos += (size_t)((lw + 3) / 4) * ((lh + 3) / 4) * 16;
@@ -2190,7 +2234,7 @@ int vkr_draw(VkrContext *c, const VkrVertex *v, uint32_t nverts,
     ub = (ib + nidx * 4 + 255) & ~255u;
     end = ub + (uint32_t)sizeof st->u;
     if (end > VKR_BUF_BYTES) {
-        fprintf(stderr, "[VKR] upload buffer full\n");
+        c->draws_dropped++;            /* said once per frame, at the flip */
         return 0;
     }
     off = vb;
@@ -2300,7 +2344,7 @@ int vkr_draw_vsh(VkrContext *c, const float *in, uint32_t nverts, uint32_t nin,
     ub = (ib + nidx * 4 + 255) & ~255u;
     end = ub + (uint32_t)sizeof st->u;
     if (end > VKR_BUF_BYTES) {
-        fprintf(stderr, "[VKR] upload buffer full\n");
+        c->draws_dropped++;            /* said once per frame, at the flip */
         return 0;
     }
     if (co != c->vsh_const_off) {
@@ -2668,11 +2712,13 @@ int vkr_flip_submit(VkrContext *c)
     cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     cp.imageSubresource.layerCount = 1;
     cp.imageExtent.depth = 1;
+    c->fr[slot].rbh_w = c->fr[slot].rbh_h = 0;
     if (c->scale == 1.0f && c->scale_x == 1.0f) {
         cp.imageExtent.width = c->w; cp.imageExtent.height = c->h;
         vkCmdCopyImageToBuffer(c->cmd, frame, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                c->fr[slot].rb, 1, &cp);
     } else {
+        c->fr[slot].rbh_w = c->sw; c->fr[slot].rbh_h = c->sh;
         /* The full image for the presenter, and a filtered guest-size copy
          * for guest memory (what the title and the screenshots read). */
         VkImageBlit bl = {0};
@@ -2722,6 +2768,8 @@ int vkr_flip_submit(VkrContext *c)
     if (++c->flip_serial % 120 == 0)     /* every ~2 s: textures unused for 5 s */
         tex_evict_old(c, 300);
     if (c->tex_bytes > (768ull << 20)) {  /* drop the cache once nothing is in flight */
+        fprintf(stderr, "[VKR] texture cache over 768 MB at flip %u: dropping %u textures (%llu MB)\n",
+                c->flip_serial, c->ntexs, (unsigned long long)(c->tex_bytes >> 20));
         vkDeviceWaitIdle(c->dev);
         tex_free_all(c);
     }
@@ -2744,14 +2792,14 @@ const uint8_t *vkr_frame_pixels(VkrContext *c, int slot)
  * (*w x *h), or NULL when the internal resolution is the guest's. */
 const uint8_t *vkr_frame_pixels_full(VkrContext *c, int slot, uint32_t *w, uint32_t *h)
 {
-    if ((c->scale == 1.0f && c->scale_x == 1.0f) || !c->fr[slot].rbh_map)
+    if (!c->fr[slot].rbh_w || !c->fr[slot].rbh_map)
         return NULL;
     if (c->fr[slot].rbh_noncoherent) {
         VkMappedMemoryRange mr = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
         mr.memory = c->fr[slot].rbh_mem; mr.offset = 0; mr.size = VK_WHOLE_SIZE;
         vkInvalidateMappedMemoryRanges(c->dev, 1, &mr);
     }
-    *w = c->sw; *h = c->sh;
+    *w = c->fr[slot].rbh_w; *h = c->fr[slot].rbh_h;
     return c->fr[slot].rbh_map;
 }
 
