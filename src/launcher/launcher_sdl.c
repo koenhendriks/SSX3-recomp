@@ -26,6 +26,7 @@
 #endif
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include "mods_list.h"
 #include <fontconfig/fontconfig.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -522,6 +523,60 @@ static void message(const char *text)
 
 /* Replaces the launcher with the game, which inherits its settings through
  * the environment. Returns only on failure. */
+/* The game's working directory holds hd-textures/, mods/ and keys.ini: the
+ * launcher's folder in a release, its parent in the source tree (build-linux/). */
+static void game_cwd(char *out, size_t n)
+{
+    char here[PATH_MAX + 16], up[PATH_MAX + 32];
+    snprintf(out, n, "%s", s_dir);
+    snprintf(here, sizeof here, "%s/hd-textures", s_dir);
+    snprintf(up, sizeof up, "%s/../hd-textures", s_dir);
+    if (!dir_exists(here) && dir_exists(up))
+        snprintf(out, n, "%s/..", s_dir);
+}
+
+/* ---- asset mods: mods/load-order.txt, read by the game (docs/MODS.md) ----- */
+
+static ModEntry s_mods[MODS_LIST_MAX];
+static int s_nmods;
+
+/* The folder the game reads: RECOMP_MODS_DIR (from the game's folder) or mods/. */
+static void mods_dir(char *out, size_t n)
+{
+    const char *e = getenv("RECOMP_MODS_DIR");
+    char cwd[PATH_MAX + 16];
+    game_cwd(cwd, sizeof cwd);
+    if (e && *e == '/')
+        snprintf(out, n, "%s", e);
+    else
+        snprintf(out, n, "%s/%s", cwd, e && *e ? e : "mods");
+}
+
+static void mods_scan(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    s_nmods = mods_list_scan(dir, s_mods, MODS_LIST_MAX);
+}
+
+static void mods_save(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    mods_list_save(dir, s_mods, s_nmods);
+}
+
+static void open_mods(void)
+{
+    char dir[PATH_MAX + 16];
+    mods_dir(dir, sizeof dir);
+    mkdir(dir, 0755);
+    {
+        char *argv[] = { "xdg-open", dir, NULL };
+        spawn_detached(argv);
+    }
+}
+
 static void play(void)
 {
     char exe[PATH_MAX + 16], cwd[PATH_MAX + 16], buf[64];
@@ -569,16 +624,8 @@ static void play(void)
         env_set("RECOMP_USB_PADS", buf);
     }
 
-    /* The working directory holds hd-textures/ and keys.ini: the launcher's
-     * folder in a release, its parent in the source tree (build-linux/). */
-    snprintf(cwd, sizeof cwd, "%s", s_dir);
-    {
-        char here[PATH_MAX + 16], up[PATH_MAX + 32];
-        snprintf(here, sizeof here, "%s/hd-textures", s_dir);
-        snprintf(up, sizeof up, "%s/../hd-textures", s_dir);
-        if (!dir_exists(here) && dir_exists(up))
-            snprintf(cwd, sizeof cwd, "%s/..", s_dir);
-    }
+    game_cwd(cwd, sizeof cwd);
+    mods_save();
 
     if (!isatty(STDERR_FILENO)) {
         char logs[PATH_MAX], path[PATH_MAX + 64];
@@ -668,7 +715,8 @@ static void frame(int x, int y, int w, int h, SDL_Color c)
 }
 
 /* Draws text with its top-left at (x, y), clipped to max_w logical pixels
- * (0 = none); wrap > 0 wraps at that width. Returns the height used. */
+ * (0 = none; > 0 keeps the end, < 0 keeps the start); wrap > 0 wraps at that
+ * width. Returns the height used. */
 static int text(TTF_Font *f, const char *s, int x, int y, SDL_Color c, int max_w, int wrap)
 {
     SDL_Surface *sf;
@@ -690,6 +738,8 @@ static int text(TTF_Font *f, const char *s, int x, int y, SDL_Color c, int max_w
         /* Too long for its box: keep the end, which is what tells two paths apart. */
         src.x = src.w - S(max_w);
         src.w = S(max_w);
+    } else if (max_w < 0 && src.w > S(-max_w)) {
+        src.w = S(-max_w);              /* a label: keep its start */
     }
     dst.x = S(x);
     dst.y = S(y);
@@ -775,7 +825,7 @@ static void checkbox(int x, int y, int w, const char *label, int *val)
         fill(x, y + 3, 16, 16, hot ? C_HOVER : C_BG);
         frame(x, y + 3, 16, 16, C_BORDER);
     }
-    text(s_font, label, x + 24, y + (22 - font_h(s_font)) / 2, C_TEXT, 0, 0);
+    text(s_font, label, x + 24, y + (22 - font_h(s_font)) / 2, C_TEXT, -(w - 24), 0);
     if (hot && s_click)
         *val = !*val;
 }
@@ -941,6 +991,38 @@ static int draw_form(int *want_play)
     combo(W_LOGLEVEL, CX, y, CW, RH, k_loglevel, N(k_loglevel), &s_loglevel);
     y += RH + 12;
 
+    heading("Asset mods", L, y);
+    y += 24;
+    if (!s_nmods) {
+        y += text(s_font, "No mods yet. A mod is a folder in mods/ that mirrors the game folder "
+                          "(data/...), and can bring a textures/ pack (docs/MODS.md).",
+                  L, y, C_DIM, 0, WIN_W - 2 * L);
+        y += 6;
+    } else {
+        y += text(s_font, "Lower in the list wins when two mods change the same file.",
+                  L, y, C_DIM, 0, WIN_W - 2 * L);
+        y += 4;
+    }
+    for (i = 0; i < s_nmods; i++, y += 26) {
+        checkbox(L, y, WIN_W - 2 * L - 130, s_mods[i].label, &s_mods[i].on);
+        if (button(WIN_W - L - 122, y, 58, 22, "Up", 0, i > 0)) {
+            ModEntry tmp = s_mods[i - 1];
+            s_mods[i - 1] = s_mods[i];
+            s_mods[i] = tmp;
+        }
+        if (button(WIN_W - L - 58, y, 58, 22, "Down", 0, i + 1 < s_nmods)) {
+            ModEntry tmp = s_mods[i + 1];
+            s_mods[i + 1] = s_mods[i];
+            s_mods[i] = tmp;
+        }
+    }
+    y += 4;
+    if (button(L, y, 150, 28, "Open mods folder", 0, 1))
+        open_mods();
+    if (button(L + 160, y, 90, 28, "Refresh", 0, 1))
+        mods_scan();
+    y += 28 + 16;
+
     heading("Controllers", L, y);
     y += 24;
     for (i = 0; i < 4; i++, y += 21)
@@ -1057,6 +1139,7 @@ int main(int argc, char **argv)
 
     ini_load();
     load_settings();
+    mods_scan();
     update_pads();
     {
         /* Size the window to the form: one layout pass while hidden. */

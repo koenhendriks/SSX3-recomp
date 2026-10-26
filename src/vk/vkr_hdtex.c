@@ -39,7 +39,13 @@ static int s_init;
 static char s_dump_dir[512];
 static char s_hd_dir[512];
 
-typedef struct { uint64_t key; char *file; int failed; uint32_t flags; } MapEntry;
+/* Texture packs, highest priority first: the enabled asset mods' textures/
+ * (last in mods/load-order.txt first), then the HD pack. */
+#define MAX_PACKS 65
+static char s_packs[MAX_PACKS][600];
+static int s_npacks;
+
+typedef struct { uint64_t key; char *file; int failed; uint32_t flags; int pack; size_t seq; } MapEntry;
 static MapEntry *s_map;
 static size_t s_nmap;
 
@@ -48,22 +54,26 @@ static size_t s_dumped_cap, s_ndumped;
 
 static unsigned s_hd_loaded, s_hd_fail;
 
+/* By key, then by pack priority and line, so the first of a key is the one kept. */
 static int cmp_entry(const void *a, const void *b)
 {
-    uint64_t x = ((const MapEntry *)a)->key, y = ((const MapEntry *)b)->key;
-    return x < y ? -1 : x > y;
+    const MapEntry *x = (const MapEntry *)a, *y = (const MapEntry *)b;
+    if (x->key != y->key)
+        return x->key < y->key ? -1 : 1;
+    return x->seq < y->seq ? -1 : x->seq > y->seq;
 }
 
-static void load_map(const char *dir)
+static size_t s_cap;
+
+/* Adds one pack's ssx3_map.txt. Returns the number of lines it mapped. */
+static size_t load_map(const char *dir, int pack)
 {
-    char path[600], line[600];
+    char path[700], line[600];
     FILE *f;
-    size_t cap = 0;
+    size_t before = s_nmap;
     snprintf(path, sizeof path, "%s/ssx3_map.txt", dir);
-    if (!(f = fopen(path, "r"))) {
-        fprintf(stderr, "[HDTEX] no HD texture pack at %s: the game's own textures\n", dir);
-        return;
-    }
+    if (!(f = fopen(path, "r")))
+        return 0;
     while (fgets(line, sizeof line, f)) {
         char *p = line, *name;
         uint64_t key;
@@ -85,20 +95,43 @@ static void load_map(const char *dir)
             }
             if (!key || !*name)
                 continue;
-            if (s_nmap == cap) {
-                cap = cap ? cap * 2 : 1024;
-                s_map = (MapEntry *)realloc(s_map, cap * sizeof *s_map);
+            if (s_nmap == s_cap) {
+                s_cap = s_cap ? s_cap * 2 : 1024;
+                s_map = (MapEntry *)realloc(s_map, s_cap * sizeof *s_map);
             }
             s_map[s_nmap].flags = fl;
         }
         s_map[s_nmap].key = key;
         s_map[s_nmap].file = strdup(name);
         s_map[s_nmap].failed = 0;
+        s_map[s_nmap].pack = pack;
+        s_map[s_nmap].seq = s_nmap;
         s_nmap++;
     }
     fclose(f);
+    log_msg(LOG_INFO, "HDTEX", "%zu replacement textures mapped (%s)", s_nmap - before, path);
+    return s_nmap - before;
+}
+
+/* One entry per key: the highest-priority pack's. */
+static void finish_map(void)
+{
+    size_t i, n = 0;
     qsort(s_map, s_nmap, sizeof *s_map, cmp_entry);
-    log_msg(LOG_INFO, "HDTEX", "%zu replacement textures mapped (%s)", s_nmap, path);
+    for (i = 0; i < s_nmap; i++) {
+        if (n && s_map[n - 1].key == s_map[i].key) {
+            free(s_map[i].file);
+            continue;
+        }
+        s_map[n++] = s_map[i];
+    }
+    s_nmap = n;
+}
+
+static void add_pack(const char *dir)
+{
+    if (s_npacks < MAX_PACKS && load_map(dir, s_npacks))
+        snprintf(s_packs[s_npacks++], sizeof s_packs[0], "%s", dir);
 }
 
 /* The pack's default place: "hd-textures" in the working directory, else
@@ -164,14 +197,28 @@ static void init(void)
         mkdir_one(s_dump_dir);
         fprintf(stderr, "[HDTEX] dumping textures to %s\n", s_dump_dir);
     }
+    {
+        extern int xbox_mods_count(void);
+        extern const char *xbox_mods_dir(void);
+        extern const char *xbox_mods_name(int i);
+        char dir[600];
+        int i;
+        for (i = xbox_mods_count() - 1; i >= 0; i--) {
+            snprintf(dir, sizeof dir, "%s/%s/textures", xbox_mods_dir(), xbox_mods_name(i));
+            add_pack(dir);
+        }
+    }
     e = getenv("RECOMP_HDTEX");
-    if (e && *e == '0' && !e[1])
-        return;
-    if (e && *e)
-        snprintf(s_hd_dir, sizeof s_hd_dir, "%s", e);
-    else
-        default_dir(s_hd_dir, sizeof s_hd_dir);
-    load_map(s_hd_dir);
+    if (!(e && *e == '0' && !e[1])) {
+        if (e && *e)
+            snprintf(s_hd_dir, sizeof s_hd_dir, "%s", e);
+        else
+            default_dir(s_hd_dir, sizeof s_hd_dir);
+        add_pack(s_hd_dir);
+    }
+    if (!s_npacks)
+        fprintf(stderr, "[HDTEX] no texture packs: the game's own textures\n");
+    finish_map();
 }
 
 int hdtex_active(void)
@@ -218,7 +265,7 @@ static int dumped_add(uint64_t key)      /* 1 if new */
 
 void hdtex_dump(uint64_t key, const uint32_t *px, uint32_t w, uint32_t h, uint32_t format)
 {
-    char path[640];
+    char path[1200];
     uint8_t hdr[18];
     FILE *f;
     uint32_t y;
@@ -264,7 +311,7 @@ int hdtex_get(VkrContext *vk, uint64_t key, uint64_t cache_key, VkrTex **out)
     init();
     if (!s_nmap || !(e = find(key)) || e->failed || !vkr_has_bc7(vk))
         return 0;
-    snprintf(path, sizeof path, "%s/%s", s_hd_dir, e->file);
+    snprintf(path, sizeof path, "%s/%s", s_packs[e->pack], e->file);
     if (!(f = fopen(path, "rb"))) {
         fprintf(stderr, "[HDTEX] cannot open %s\n", path);
         e->failed = 1; s_hd_fail++;
