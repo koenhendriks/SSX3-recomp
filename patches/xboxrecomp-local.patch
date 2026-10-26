@@ -951,6 +951,86 @@ index bb42c28..973b6c7 100644
  else()
      add_library(xbox_d3d8 STATIC
          d3d8_gl.c
+diff --git a/src/d3d/d3d8_swizzle.h b/src/d3d/d3d8_swizzle.h
+index 281b4d2..10a04a9 100644
+--- a/src/d3d/d3d8_swizzle.h
++++ b/src/d3d/d3d8_swizzle.h
+@@ -415,6 +415,75 @@ static inline int d3d8_dxt_decode_texel(const uint8_t *base, uint32_t fmt,
+     return 1;
+ }
+ 
++/* A whole DXT1/DXT3/DXT5 block, texel i (row-major, 4x4) into out[i]:
++ * exactly what d3d8_dxt_decode_texel gives for each, in one pass. */
++static inline int d3d8_dxt_decode_block(const uint8_t *b, uint32_t fmt, uint32_t out[16])
++{
++    uint32_t block_bytes = d3d8_format_dxt_block_bytes(fmt);
++    uint32_t alpha[16], c[4], c0, c1, i, idx;
++
++    if (!block_bytes)
++        return 0;
++    for (i = 0; i < 16; i++)
++        alpha[i] = 255u;
++    if (block_bytes == 16) {
++        if (fmt == 0x0E) {                 /* DXT3: 4 bits per texel, packed */
++            for (i = 0; i < 16; i++) {
++                uint32_t nib = b[i >> 1];
++                alpha[i] = d3d8_expand_channel((i & 1u) ? (nib >> 4) : (nib & 0x0Fu), 4);
++            }
++        } else {                           /* DXT5: two endpoints + 3-bit indices */
++            uint32_t a0 = b[0], a1 = b[1], a[8];
++            uint64_t bits = 0;
++            for (i = 0; i < 6; i++)
++                bits |= (uint64_t)b[2 + i] << (8 * i);
++            a[0] = a0; a[1] = a1;
++            if (a0 > a1)
++                for (i = 1; i < 7; i++)
++                    a[i + 1] = ((7 - i) * a0 + i * a1) / 7;
++            else {
++                for (i = 1; i < 5; i++)
++                    a[i + 1] = ((5 - i) * a0 + i * a1) / 5;
++                a[6] = 0; a[7] = 255;
++            }
++            for (i = 0; i < 16; i++)
++                alpha[i] = a[(bits >> (3 * i)) & 7u];
++        }
++        b += 8;
++    }
++
++    c0 = (uint32_t)b[0] | ((uint32_t)b[1] << 8);
++    c1 = (uint32_t)b[2] | ((uint32_t)b[3] << 8);
++    for (i = 0; i < 2; i++) {
++        uint32_t rgb = i ? c1 : c0;
++        c[i] = (d3d8_expand_channel((rgb >> 11) & 0x1Fu, 5) << 16)
++             | (d3d8_expand_channel((rgb >>  5) & 0x3Fu, 6) <<  8)
++             |  d3d8_expand_channel( rgb        & 0x1Fu, 5);
++    }
++    c[2] = c[3] = 0;
++    if (c0 > c1 || block_bytes == 16) {
++        for (i = 0; i < 3; i++) {
++            uint32_t sh = i * 8, m0 = (c[0] >> sh) & 0xFFu, m1 = (c[1] >> sh) & 0xFFu;
++            c[2] |= ((2 * m0 + m1) / 3) << sh;
++            c[3] |= ((m0 + 2 * m1) / 3) << sh;
++        }
++    } else {
++        for (i = 0; i < 3; i++) {
++            uint32_t sh = i * 8, m0 = (c[0] >> sh) & 0xFFu, m1 = (c[1] >> sh) & 0xFFu;
++            c[2] |= ((m0 + m1) / 2) << sh;
++        }
++    }
++
++    idx = (uint32_t)b[4] | ((uint32_t)b[5] << 8) | ((uint32_t)b[6] << 16) | ((uint32_t)b[7] << 24);
++    for (i = 0; i < 16; i++) {
++        uint32_t k = (idx >> (2 * i)) & 3u, a = alpha[i];
++        if (block_bytes == 8 && c0 <= c1 && k == 3)
++            a = 0;                         /* DXT1's one bit of alpha */
++        out[i] = (a << 24) | (c[k] & 0x00FFFFFFu);
++    }
++    return 1;
++}
++
+ static inline int d3d8_format_is_swizzled(uint32_t fmt)
+ {
+     /* Linear formats (0x10-0x41 range excludes the non-LIN 0x19-0x3C range) */
 diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
 index caef326..6d5d794 100644
 --- a/src/input/CMakeLists.txt
@@ -3811,7 +3891,7 @@ index 0000000..2102f59
 +
 +#endif
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
-index c65632c..35cb429 100644
+index c65632c..0e1feb9 100644
 --- a/src/kernel/nv2a_pb_exec.c
 +++ b/src/kernel/nv2a_pb_exec.c
 @@ -25,6 +25,7 @@
@@ -5561,7 +5641,7 @@ index c65632c..35cb429 100644
      peek_addresses();
      peek_chain();
      if (getenv("RECOMP_FIND_NAN")) {
-@@ -3534,10 +4602,157 @@ void nv2a_pb_exec_report(void)
+@@ -3534,10 +4602,200 @@ void nv2a_pb_exec_report(void)
               * is using. */
              union { uint32_t u; float f; } v;
              v.u = s_unhandled[i].last_param;
@@ -5654,12 +5734,55 @@ index c65632c..35cb429 100644
 +static const Texture *s_dec_tex;
 +static uint32_t *s_dec_out;
 +
++/* RECOMP_DXT_BLOCK_DECODE=0: decode DXT textures texel by texel as before. */
++static int getenv_fast_dxt_off(void)
++{
++    static int off = -1;
++    if (off < 0) {
++        const char *e = getenv("RECOMP_DXT_BLOCK_DECODE");
++        off = e && e[0] == '0';
++    }
++    return off;
++}
++
++/* A DXT texture, block rows k, k+n, ...: each 4x4 block decoded once
++ * (d3d8_dxt_decode_block) straight into the image. Through sample_tex every
++ * texel looked its block up and a miss decoded it texel by texel -- 76 ms
++ * of CPU for the ~470 textures a race start brings in at once, most of a
++ * 132 ms frame. */
++static void tex_decode_dxt_job(int k, int n)
++{
++    const Texture *t = s_dec_tex;
++    uint32_t bb = d3d8_format_dxt_block_bytes(t->color);
++    uint32_t bw = (t->width + 3) >> 2, bh = (t->height + 3) >> 2;
++    uint32_t faces = t->cube ? 6 : 1, stride = t->cube ? tex_face_stride(t) : 0;
++    uint32_t r, bx, i, px[16];
++    for (r = (uint32_t)k; r < bh * faces; r += (uint32_t)n) {
++        uint32_t face = r / bh, by = r % bh;
++        const uint8_t *row = XBOX_HOST(t->offset + face * stride) + (size_t)by * bw * bb;
++        for (bx = 0; bx < bw; bx++) {
++            if (!d3d8_dxt_decode_block(row + (size_t)bx * bb, t->color, px))
++                for (i = 0; i < 16; i++)
++                    px[i] = 0xFFFF00FFu;
++            for (i = 0; i < 16; i++) {
++                uint32_t x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
++                if (x < t->width && y < t->height)
++                    s_dec_out[((size_t)face * t->height + y) * t->width + x] = px[i];
++            }
++        }
++    }
++}
++
 +/* Rows k, k+n, ... of the texture being decoded. */
 +static void tex_decode_job(int k, int n)
 +{
 +    const Texture *t = s_dec_tex;
 +    uint32_t x, y, rows = t->cube ? t->height * 6 : t->height;
 +    uint32_t stride = t->cube ? tex_face_stride(t) : 0;
++    if (d3d8_format_dxt_block_bytes(t->color) && !getenv_fast_dxt_off()) {
++        tex_decode_dxt_job(k, n);
++        return;
++    }
 +    for (y = (uint32_t)k; y < rows; y += (uint32_t)n)
 +        for (x = 0; x < t->width; x++) {
 +            uint32_t argb = 0xFFFF00FFu;
@@ -6502,7 +6625,7 @@ index 0b2d723..f612ac4 100644
      fflush(stderr);
  }
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 72d5131..2ae386e 100644
+index 72d5131..a930e59 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -191,11 +191,11 @@ static const struct { uint32_t offset; uint32_t busy_mask; } NV2A_ACK[] = {
@@ -6710,7 +6833,7 @@ index 72d5131..2ae386e 100644
      n = (s_fb_pitch * s_fb_height) / 4;
      for (i = 0; i < n; i++) {
          sum = sum * 33u + p[i];
-@@ -873,6 +925,147 @@ static void framebuffer_probe_tick(void)
+@@ -873,6 +925,151 @@ static void framebuffer_probe_tick(void)
      fflush(stderr);
  }
  
@@ -6823,6 +6946,10 @@ index 72d5131..2ae386e 100644
 +    QueryPerformanceFrequency(&freq);
 +    idle_ticks = freq.QuadPart * (e ? atoi(e) : 2000) / 1000000;
 +    QueryPerformanceCounter(&last);
++    /* D3D's kickoff spins until this thread clears the flush bit; after a
++     * quiet spell it Sleep(1)-polls, and at normal priority a busy PC woke
++     * it 15-30 ms late (CLAUDE.md "FPS DROPS"). */
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 +
 +    while (!InterlockedCompareExchange(&g_nv2a_ack_stop, 0, 0)) {
 +        /* Only the PFB flush bit (NV2A_ACK[0]). The interrupt status
@@ -6858,7 +6985,7 @@ index 72d5131..2ae386e 100644
  static DWORD WINAPI nv2a_ack_thread(LPVOID param)
  {
      volatile uint32_t *regs = (volatile uint32_t *)param;
-@@ -931,6 +1124,49 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+@@ -931,6 +1128,49 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
              static uint32_t last_put;
              DWORD now_ms = GetTickCount();
              uint32_t put = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
@@ -6908,7 +7035,7 @@ index 72d5131..2ae386e 100644
              if (put != last_put || (now_ms - last_put_ms) > 2000) {
                  /* Survey the segment the title just submitted, once. */
                  {
-@@ -1034,8 +1270,10 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+@@ -1034,8 +1274,10 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
              static uint32_t last_start = 0xFFFFFFFFu;
              uint32_t start = *(volatile uint32_t *)((char *)regs + 0x600800);
              if (start != last_start) {
@@ -6920,7 +7047,7 @@ index 72d5131..2ae386e 100644
                  fflush(stderr);
              }
          }
-@@ -1054,21 +1292,59 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+@@ -1054,21 +1296,64 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
           * up XNet. A live clock is also just the truth -- KeTickCount ticks on
           * hardware whether or not anyone is asleep. GetTickCount() shares the
           * millisecond unit, so the rate matches. */
@@ -6952,6 +7079,11 @@ index 72d5131..2ae386e 100644
 +    volatile uint32_t *pcrtc = (volatile uint32_t *)((char *)param + 0x600100);
 +    volatile uint32_t *pmc   = (volatile uint32_t *)((char *)param + 0x000100);
 +
++    /* The title spins on what this thread clears (D3D's vblank DPC holds the
++     * guest CPU meanwhile): at normal priority a busy PC left it unwoken for
++     * 15-30 ms at a time. It sleeps almost always, so time-critical costs
++     * nothing. */
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 +    while (!InterlockedCompareExchange(&g_nv2a_ack_stop, 0, 0)) {
 +        if (*pcrtc == 1u)                       /* acknowledged: marker gone */
 +            *pcrtc = 0;
@@ -6982,7 +7114,7 @@ index 72d5131..2ae386e 100644
      if (g_nv2a_ack_thread) {
          fprintf(stderr, "  NV2A busy-bit ack: %zu register(s) acknowledged\n",
                  sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]));
-@@ -1237,15 +1513,15 @@ int recomp_guest_longjmp(uint32_t buf_va, uint32_t value)
+@@ -1237,15 +1522,15 @@ int recomp_guest_longjmp(uint32_t buf_va, uint32_t value)
          /* The callee-saved registers and the stack, exactly as the CRT's
           * longjmp restores them: esp is the setjmp-time esp plus the return
           * address that setjmp's own ret would have popped. */
@@ -7003,7 +7135,7 @@ index 72d5131..2ae386e 100644
          g_ebp     = g_seh_ebp;
  
          s_jmp_used = i + 1;   /* the inner buffers died with their frames */
-@@ -1344,7 +1620,7 @@ static int watch_is_code(uint32_t va)
+@@ -1344,7 +1629,7 @@ static int watch_is_code(uint32_t va)
  static void watch_report(void)
  {
      const uint8_t *mem = (const uint8_t *)g_memory_offset;
@@ -7012,7 +7144,7 @@ index 72d5131..2ae386e 100644
      uint32_t esp = g_esp, i, shown = 0;
  
      if (now == g_watch_last)
-@@ -1362,7 +1638,7 @@ static void watch_report(void)
+@@ -1362,7 +1647,7 @@ static void watch_report(void)
          uint32_t v;
          if (!peek_readable(slot))
              break;
@@ -7021,7 +7153,7 @@ index 72d5131..2ae386e 100644
          if (watch_is_code(v)) {
              fprintf(stderr, "         [esp+%-4u] %08X\n", i * 4u, v);
              shown++;
-@@ -1379,7 +1655,7 @@ static void watch_report(void)
+@@ -1379,7 +1664,7 @@ static void watch_report(void)
              if (!peek_readable(slot))
                  break;
              fprintf(stderr, "         raw[esp+%-4u] %08X\n", i * 4u,
@@ -7030,7 +7162,7 @@ index 72d5131..2ae386e 100644
          }
      }
      fflush(stderr);
-@@ -1387,6 +1663,10 @@ static void watch_report(void)
+@@ -1387,6 +1672,10 @@ static void watch_report(void)
  
  static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
  {
@@ -7041,7 +7173,7 @@ index 72d5131..2ae386e 100644
      DWORD code = ep->ExceptionRecord->ExceptionCode;
      DWORD old;
  
-@@ -1415,6 +1695,7 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
+@@ -1415,6 +1704,7 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
          }
      }
      return EXCEPTION_CONTINUE_SEARCH;
@@ -7049,7 +7181,7 @@ index 72d5131..2ae386e 100644
  }
  
  /* The target, which may be reached through pointers that do not exist yet.
-@@ -1437,7 +1718,7 @@ static int watch_resolve(uint32_t *out)
+@@ -1437,7 +1727,7 @@ static int watch_resolve(uint32_t *out)
      for (k = 0; k < g_watch_derefs; k++) {
          if (!peek_readable(a))
              return 0;
@@ -7058,7 +7190,7 @@ index 72d5131..2ae386e 100644
          if (!a)
              return 0;
      }
-@@ -1506,11 +1787,9 @@ static int watch_arm(uint32_t va)
+@@ -1506,11 +1796,9 @@ static int watch_arm(uint32_t va)
                          "not armed\n", g_watch_va);
          return 0;
      }
@@ -7072,7 +7204,7 @@ index 72d5131..2ae386e 100644
      g_watch_veh = AddVectoredExceptionHandler(1, watch_veh);
      if (!g_watch_veh
              || !VirtualProtect(g_watch_page, 4096, PAGE_READONLY, &old)) {
-@@ -1564,13 +1843,13 @@ void xbox_PeekSample(const char *label)
+@@ -1564,13 +1852,13 @@ void xbox_PeekSample(const char *label)
              end++;
          a = (uint32_t)va;
          for (k = 0; k < derefs && ok; k++) {
@@ -7088,7 +7220,7 @@ index 72d5131..2ae386e 100644
          else
              fprintf(stderr, " [%08X]=??", a);
          q = (*end == ',') ? end + 1 : end;
-@@ -1651,7 +1930,7 @@ static DWORD WINAPI xbox_watchdog_thread(LPVOID unused)
+@@ -1651,7 +1939,7 @@ static DWORD WINAPI xbox_watchdog_thread(LPVOID unused)
          uint32_t a = esp + i * 4;
          if (a < XBOX_STACK_BASE || a >= XBOX_STACK_TOP) break;
          fprintf(stderr, "    GS %08X %08X\n", a,
@@ -7097,7 +7229,7 @@ index 72d5131..2ae386e 100644
      }
      fflush(stderr);
      _exit(3);
-@@ -1704,6 +1983,10 @@ volatile uint32_t g_icall_trace[16] = {0};
+@@ -1704,6 +1992,10 @@ volatile uint32_t g_icall_trace[16] = {0};
  volatile uint32_t g_icall_trace_idx = 0;
  volatile uint64_t g_icall_count = 0;
  
@@ -7108,7 +7240,7 @@ index 72d5131..2ae386e 100644
  BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
  {
      g_force_return = getenv("RECOMP_FORCE_RETURN") != NULL;
-@@ -1739,6 +2022,15 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1739,6 +2031,15 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * With file mapping views, we create aliased mappings at 64 MB intervals
       * that all point to the same physical memory.
       */
@@ -7124,7 +7256,7 @@ index 72d5131..2ae386e 100644
      g_mapping_handle = CreateFileMappingA(
          INVALID_HANDLE_VALUE,   /* page file backed */
          NULL,                   /* default security */
-@@ -1790,7 +2082,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1790,7 +2091,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
           * this on Windows needs placeholder reservations (VirtualAlloc2). */
  #ifndef _WIN32
          g_span_size = g_memory_size * (size_t)(1 + XBOX_NUM_MIRRORS);
@@ -7140,7 +7272,7 @@ index 72d5131..2ae386e 100644
          if (g_span_base) {
              VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
              g_memory_base = MapViewOfFileEx(g_mapping_handle,
-@@ -1826,6 +2125,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1826,6 +2134,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          }
      }
  
@@ -7148,7 +7280,7 @@ index 72d5131..2ae386e 100644
      if (!g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
                  g_memory_size / 1024);
-@@ -1908,7 +2208,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1908,7 +2217,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * Helper macro: convert Xbox VA to actual mapped address.
       * When g_memory_offset == 0 (ideal case), this is identity.
       */
@@ -7157,7 +7289,7 @@ index 72d5131..2ae386e 100644
  
      /*
       * Copy XBE header to base address.
-@@ -2088,7 +2388,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2088,7 +2397,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
               * slots, and kernel.h notes 366 is short by 12. A title importing
               * a high ordinal would have had its table truncated here. */
              for (uint32_t t = 0; t < XBOX_KERNEL_THUNK_TABLE_SIZE; t++) {
@@ -7166,7 +7298,7 @@ index 72d5131..2ae386e 100644
                  if (entry == 0) break;
                  thunk_count++;
              }
-@@ -2143,7 +2443,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2143,7 +2452,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * We use free space in the BSS area for the fake structures.
       */
      {
@@ -7175,7 +7307,7 @@ index 72d5131..2ae386e 100644
          #define MEM32_INIT(va, val) (*(uint32_t *)XBOX_VA(va) = (uint32_t)(val))
  
          /* Fake TIB at address 0x0 */
-@@ -2274,6 +2574,10 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2274,6 +2583,10 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       */
      {
          uintptr_t contig_native = XBOX_CONTIG_BASE + g_memory_offset;
@@ -7186,7 +7318,7 @@ index 72d5131..2ae386e 100644
          g_contig_mapping = CreateFileMappingW(
              INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
              0, (DWORD)XBOX_CONTIG_SIZE, NULL);
-@@ -2288,6 +2592,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2288,6 +2601,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                  MEM_RESERVE | MEM_COMMIT,
                  PAGE_READWRITE
              );
@@ -7194,7 +7326,7 @@ index 72d5131..2ae386e 100644
          if (g_contig_memory) {
              fprintf(stderr, "  Contiguous window: %u MB at Xbox VA 0x%08X\n",
                      XBOX_CONTIG_SIZE / (1024 * 1024), XBOX_CONTIG_BASE);
-@@ -2319,12 +2624,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2319,12 +2633,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       */
      {
          uintptr_t nv2a_native = XBOX_NV2A_BASE + g_memory_offset;
@@ -7212,7 +7344,7 @@ index 72d5131..2ae386e 100644
          /* The pushbuffer survey rides on the same poll, so either
           * variable arms it. */
          s_nv2a_trace = getenv("RECOMP_NV2A_TRACE") != NULL
-@@ -2364,12 +2674,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2364,12 +2683,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       */
      {
          uintptr_t mcpx_native = XBOX_MCPX_BASE + g_memory_offset;
@@ -7230,7 +7362,7 @@ index 72d5131..2ae386e 100644
          g_mcpx_regs = g_mcpx_memory;
          if (g_mcpx_memory) {
              /* AC'97 codec ready.
-@@ -2425,9 +2740,13 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2425,9 +2749,13 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                   * memory keeps what the title writes. */
                  enum { APU_TRAP_BYTES = 0x00030000 };
                  DWORD old_protect;
@@ -7244,7 +7376,7 @@ index 72d5131..2ae386e 100644
                  if (g_apu_mmio_trapped)
                      fprintf(stderr, "  APU: 0x%08X..0x%08X trapped for MMIO"
                                      " (GP/EP DSP memory left as RAM)\n",
-@@ -2437,7 +2756,9 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2437,7 +2765,9 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                      |= MCPX_AC97_CODEC_READY;
                  /* Before the trap is armed: this write would otherwise be
                   * the first thing to fault. */
@@ -7255,7 +7387,7 @@ index 72d5131..2ae386e 100644
                  fprintf(stderr, "  AC97: codec reported ready at 0x%08X"
                                  " (DirectSound will initialise)\n",
                          XBOX_MCPX_BASE + MCPX_AC97_CODEC_STATUS);
-@@ -2456,12 +2777,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2456,12 +2786,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      {
          uintptr_t flash_native = XBOX_FLASH_BASE + g_memory_offset;
  
@@ -7273,7 +7405,7 @@ index 72d5131..2ae386e 100644
          if (g_flash_memory) {
              fprintf(stderr, "  Flash ROM aperture: %u MB at Xbox VA "
                      "0x%08X (zeroed, not a real BIOS image)\n",
-@@ -2494,7 +2820,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2494,7 +2829,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          /* Already committed if the contiguous window above succeeded -
           * 0x80010000 sits inside it - so just use that storage. */
          g_kernel_memory = g_contig_memory
@@ -7282,7 +7414,7 @@ index 72d5131..2ae386e 100644
              : VirtualAlloc((LPVOID)kernel_native, KERNEL_PAGE_SIZE,
                             MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
          if (g_kernel_memory) {
-@@ -2532,6 +2858,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2532,6 +2867,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * intervals. All views alias the same physical pages, so reads and
       * writes at any mirror address correctly access the base data.
       */
@@ -7290,7 +7422,7 @@ index 72d5131..2ae386e 100644
      {
          int mirrors_ok = 0;
          /* The tiled aperture is a specific architectural alias -- physical RAM
-@@ -2644,11 +2971,9 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2644,11 +2980,9 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
               * startup line. */
              {
                  volatile uint32_t *via_tiled =
@@ -7304,7 +7436,7 @@ index 72d5131..2ae386e 100644
                  uint32_t saved = *via_contig;
  
                  *via_tiled = 0xA5C30F17u;
-@@ -2674,6 +2999,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -2674,6 +3008,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          }
      }
  
@@ -7312,7 +7444,7 @@ index 72d5131..2ae386e 100644
      xbox_WatchInit();
      fprintf(stderr, "xbox_MemoryLayoutInit: complete\n");
      return TRUE;
-@@ -2834,6 +3160,26 @@ ptrdiff_t xbox_GetMemoryOffset(void)
+@@ -2834,6 +3169,26 @@ ptrdiff_t xbox_GetMemoryOffset(void)
      return g_memory_offset;
  }
  
@@ -7339,7 +7471,7 @@ index 72d5131..2ae386e 100644
  /* ── Dynamic heap allocator ────────────────────────────────
   *
   * Simple bump allocator for MmAllocateContiguousMemory and similar.
-@@ -2916,7 +3262,7 @@ static uint32_t heap_carve_free(uint32_t size, uint32_t alignment)
+@@ -2916,7 +3271,7 @@ static uint32_t heap_carve_free(uint32_t size, uint32_t alignment)
          g_heap_blocks[i].free = 0;
          if (back && !heap_insert_free(i + 1, start + size, back))
              g_heap_blocks[i].size += back;   /* table full: keep it attached */
@@ -7348,7 +7480,7 @@ index 72d5131..2ae386e 100644
          return start;
      }
      return 0;
-@@ -2957,7 +3303,7 @@ static int g_thread_stacks_used = 0;
+@@ -2957,7 +3312,7 @@ static int g_thread_stacks_used = 0;
  uint32_t xbox_AllocThreadTib(void)
  {
      /* XBOX_VA is scoped to the loader; the same arithmetic, spelled here. */
@@ -7357,7 +7489,7 @@ index 72d5131..2ae386e 100644
      const uint32_t tib_size = 0x40;
      uint32_t tib, block, thread_data, total;
  
-@@ -3153,7 +3499,7 @@ uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
+@@ -3153,7 +3508,7 @@ uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
      if (reclaim)
          ReleaseSRWLockExclusive(&g_contig_lock);
  
@@ -7366,7 +7498,7 @@ index 72d5131..2ae386e 100644
      return result;
  }
  
-@@ -3267,7 +3613,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
+@@ -3267,7 +3622,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
              }
              g_heap_blocks[i].free = 0;
              result = g_heap_blocks[i].addr;
@@ -7375,7 +7507,7 @@ index 72d5131..2ae386e 100644
              return result;
          }
      }
-@@ -3313,7 +3659,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
+@@ -3313,7 +3668,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
      g_heap_next = result + size;
  
      /* Zero-fill the allocated block (Xbox memory is always zeroed) */
@@ -10089,6 +10221,80 @@ index 8e9325e..e2089b0 100644
  /* ================================================================
   * Register name aliases for generated code
   *
+diff --git a/tests/dxt_block/CMakeLists.txt b/tests/dxt_block/CMakeLists.txt
+new file mode 100644
+index 0000000..c3a7f3d
+--- /dev/null
++++ b/tests/dxt_block/CMakeLists.txt
+@@ -0,0 +1,8 @@
++cmake_minimum_required(VERSION 3.20)
++project(dxt_block_test C)
++# Header-only (src/d3d/d3d8_swizzle.h): no runtime to link.
++set(CMAKE_C_STANDARD 11)
++add_executable(dxt_block_test test_main.c)
++target_include_directories(dxt_block_test PRIVATE ../../src/d3d)
++enable_testing()
++add_test(NAME dxt_block_test COMMAND dxt_block_test)
+diff --git a/tests/dxt_block/test_main.c b/tests/dxt_block/test_main.c
+new file mode 100644
+index 0000000..d12b91b
+--- /dev/null
++++ b/tests/dxt_block/test_main.c
+@@ -0,0 +1,54 @@
++/*
++ * dxt_block test: d3d8_dxt_decode_block (a whole 4x4 block in one pass, for
++ * decoding full textures) gives exactly what sixteen d3d8_dxt_decode_texel
++ * calls give, for DXT1, DXT3 and DXT5 blocks of every kind: random bytes,
++ * DXT1's three-colour mode (c0 <= c1), DXT5's six- and eight-step alpha.
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include "d3d8_swizzle.h"
++
++static uint32_t s_rng = 12345;
++static uint8_t rnd(void) { s_rng = s_rng * 1103515245u + 12345u; return (uint8_t)(s_rng >> 16); }
++
++static int same_block(const uint8_t *blk, uint32_t fmt)
++{
++    uint32_t by_texel[16], by_block[16], i;
++    for (i = 0; i < 16; i++)
++        d3d8_dxt_decode_texel(blk, fmt, i & 3, i >> 2, 4, &by_texel[i]);
++    memset(by_block, 0xCD, sizeof by_block);
++    if (!d3d8_dxt_decode_block(blk, fmt, by_block))
++        return 0;
++    return !memcmp(by_texel, by_block, sizeof by_texel);
++}
++
++int main(void)
++{
++    static const uint32_t fmts[3] = {0x0C, 0x0E, 0x0F};   /* DXT1, DXT3, DXT5 */
++    static const char *names[3] = {"DXT1", "DXT3", "DXT5"};
++    int f, n, fail = 0;
++    printf("dxt_block\n");
++    for (f = 0; f < 3; f++) {
++        int bad = 0;
++        for (n = 0; n < 20000; n++) {
++            uint8_t blk[16];
++            uint32_t i;
++            for (i = 0; i < 16; i++)
++                blk[i] = rnd();
++            /* every other block forced into the less common modes */
++            if (n & 1) {
++                uint8_t *col = blk + (fmts[f] == 0x0C ? 0 : 8);
++                uint8_t t0 = col[0], t1 = col[1];
++                col[0] = col[2]; col[1] = col[3]; col[2] = t0; col[3] = t1;   /* swap c0/c1 */
++                if (fmts[f] == 0x0F) { uint8_t a = blk[0]; blk[0] = blk[1]; blk[1] = a; }
++            }
++            if (!same_block(blk, fmts[f]))
++                bad++;
++        }
++        printf("  %s  %s: 20000 blocks, %d differ\n", bad ? "FAIL" : "ok  ", names[f], bad);
++        fail |= bad != 0;
++    }
++    printf(fail ? "FAILED\n" : "all passed\n");
++    return fail;
++}
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
 index 3cd9250..0e9c350 100644
 --- a/tools/recomp/translator.py

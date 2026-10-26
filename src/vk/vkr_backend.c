@@ -20,7 +20,7 @@
 #endif
 
 /* RECOMP_VKR_STATS=1: where the backend's time goes, once a second. */
-static double s_t[6];            /* draw total, lookup+hash, decode+upload, vkr_draw, flip */
+static double s_t[8];            /* draw total, lookup+hash, decode+upload, vkr_draw, flip, -, decode, create */
 static unsigned s_n[3];          /* draws, texture creates, flips */
 static int s_stats = -1;
 
@@ -48,8 +48,8 @@ static void stats_tick(void)
     if (t - last < 1000.0)
         return;
     fprintf(stderr, "[VKRSTAT] draws %u tex-creates %u flips %u | ms/s: draw-total %.0f lookup+hash %.0f"
-            " decode+upload %.0f vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
-            s_t[0], s_t[1], s_t[2], s_t[3], s_t[4]);
+            " decode+upload %.0f (decode %.0f, hd+create %.0f) vkr_draw %.0f flip %.0f\n", s_n[0], s_n[1], s_n[2],
+            s_t[0], s_t[1], s_t[2], s_t[6], s_t[7], s_t[3], s_t[4]);
     memset(s_t, 0, sizeof s_t); memset(s_n, 0, sizeof s_n);
     last = t;
 }
@@ -637,7 +637,11 @@ static void bind_textures(VkrDrawState *st)
             uint32_t *px = (uint32_t *)malloc((size_t)ti.width * rows * 4);
             int rt = is_rt(ti.offset), j;
             uint64_t key = ti.hash;
-            if (px && nv2a_exec_tex_decode(k, px)) {
+            double td0 = s_stats ? now_ms() : 0;
+            int decoded = px && nv2a_exec_tex_decode(k, px);
+            if (s_stats) s_t[6] += now_ms() - td0;
+            if (decoded) {
+                double tc0 = s_stats ? now_ms() : 0;
                 /* A render target redrawn every frame: one texture per
                  * address, updated in place, not a new one per frame. */
                 VkrTex *old = NULL;
@@ -671,6 +675,7 @@ static void bind_textures(VkrDrawState *st)
                         s_nrt_tex++;
                     }
                 }
+                if (s_stats) s_t[7] += now_ms() - tc0;
             }
             free(px);
             if (s_stats) { s_t[2] += now_ms() - t1; s_n[1]++; }
