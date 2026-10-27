@@ -92,3 +92,6 @@ dist/
 hd-textures/.sig_cache.npz
 disk
 build-web/
+
+# Python bytecode from the tools and their tests
+__pycache__/

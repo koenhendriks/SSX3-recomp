@@ -92,6 +92,22 @@ else()
     add_executable(${PROJECT_NAME} ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
 endif()
 
+# The hand-written code uses PAL addresses. regen writes port_map.h, which maps
+# them to the build the XBE is (identity for PAL; tools/xbe_port/port.py). Only
+# the hand-written sources get it: the generated code already has the build's names.
+# The launchers use it to check that a game folder is the build they were made for.
+set(PORT_MAP_H ${CMAKE_CURRENT_SOURCE_DIR}/src/recomp/gen/port_map.h)
+set(PORT_MAP_SOURCES ${GAME_SOURCES} src/launcher/launcher.c src/launcher/launcher_sdl.c)
+if(NOT EXISTS ${PORT_MAP_H})
+    message(FATAL_ERROR "src/recomp/gen/port_map.h is missing. Run scripts/regen.sh or regen.ps1 "
+                        "(\"lift\" is enough after pulling the change that added it).")
+endif()
+if(MSVC)
+    set_source_files_properties(${PORT_MAP_SOURCES} PROPERTIES COMPILE_OPTIONS "/FI${PORT_MAP_H}")
+else()
+    set_source_files_properties(${PORT_MAP_SOURCES} PROPERTIES COMPILE_OPTIONS "-include;${PORT_MAP_H}")
+endif()
+
 # The build's version for the session log (src/journal.c)
 add_custom_target(ssx3_build_info
     COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/build_info.h

@@ -167,11 +167,11 @@ void ssx3_SetAspect(float a)
 /* The app state is ingame (races, free-roam: vtable 00299D7C). */
 int ssx3_InGame(void)
 {
-    uint32_t app = MEM32(0x003A930Cu), cur;
+    uint32_t app = MEM32(VA(0x003A930C)), cur;
     if (app < 0x10000u)
         return 0;
     cur = MEM32(app + 4);
-    return cur >= 0x10000u && MEM32(cur) == 0x00299D7Cu;
+    return cur >= 0x10000u && MEM32(cur) == VA(0x00299D7C);
 }
 
 int ssx3_WidescreenNow(void)
@@ -199,7 +199,7 @@ void sub_001AD720(void)
 {
     static float fast = -1.0f, orig;
     static int boosted;
-    uint32_t app = MEM32(0x003A930Cu), cur;
+    uint32_t app = MEM32(VA(0x003A930C)), cur;
     if (fast < 0.0f) {
         const char *e = getenv("RECOMP_FAST_BOOT");
         fast = e && *e ? (float)atof(e) : 4.0f;
@@ -208,8 +208,8 @@ void sub_001AD720(void)
     if (fast > 1.0f && app >= 0x10000u) {
         int want;
         cur = MEM32(app + 4);
-        want = cur >= 0x10000u && MEM32(cur) == 0x00289618u      /* frontend */
-            && (!g_ssx3_ui_screen_ptr || g_ssx3_ui_screen_vt == 0x0028B428u);
+        want = cur >= 0x10000u && MEM32(cur) == VA(0x00289618)      /* frontend */
+            && (!g_ssx3_ui_screen_ptr || g_ssx3_ui_screen_vt == VA(0x0028B428));
         if (want && !boosted) {
             uint32_t bits = MEM32(app + 0x28);
             memcpy(&orig, &bits, 4);
@@ -305,7 +305,7 @@ static int obj_hidden(uint32_t tester, uint32_t a, uint32_t b)
     PUSH32(g_esp, b);
     PUSH32(g_esp, a);
     g_ecx = tester;
-    PUSH32(g_esp, 0x000D262Bu);       /* a return address inside the caller */
+    PUSH32(g_esp, VA(0x000D262B));       /* a return address inside the caller */
     sub_0001E2C0();                   /* ret 8: pops it and both arguments */
     return (g_eax & 0xFF) != 0;
 }
@@ -649,7 +649,7 @@ void sub_000C4C20(void)
         fprintf(stderr, "[INGAMESCREEN] open 0x%X from", MEM32(g_esp + 4));
         for (k = 0; k < 24; k++) {
             uint32_t w = MEM32(g_esp + k * 4);
-            if (w >= 0x00011000u && w < 0x00280000u)
+            if (w >= 0x00011000u && w < SSX3_CODE_END)
                 fprintf(stderr, " %08X", w);
         }
         fprintf(stderr, "\n");
@@ -718,7 +718,7 @@ void sub_000E1B90(void)
         const char *e = getenv("RECOMP_DEBUG_MENU");
         on = e && *e && *e != '0';
     }
-    if (on && app >= 0x10000u && !MEM8(app + 0x60) && MEM32(0x0036843Cu) == 0x27) {
+    if (on && app >= 0x10000u && !MEM8(app + 0x60) && MEM32(VA(0x0036843C)) == 0x27) {
         ST8(app + 0x60, 1);
         fprintf(stderr, "[DEBUGMENU] lodge requested: real frontend from now on\n");
         fflush(stderr);
@@ -754,7 +754,7 @@ void sub_000CC8F0(void)
     ssx3_CamPreUpdate();                  /* the modern race camera: camera_mode.c */
     sub_000CC8F0_gen();
     ssx3_CamPostUpdate(self);
-    app = MEM32(0x003A930Cu);
+    app = MEM32(VA(0x003A930C));
     if (app < 0x10000u)
         return;
     want = MEM8(app + 0x38) != 0;
@@ -801,7 +801,7 @@ extern int xbox_FramebufferKeyPresses(int vk);
 /* Player 1's cash record (0 when there is no profile or rider yet). */
 static uint32_t player_cash_va(int *rider_out)
 {
-    uint32_t rec = MEM32(0x00346400u) * 32u + 0x00345948u;
+    uint32_t rec = MEM32(VA(0x00346400)) * 32u + VA(0x00345948);
     int slot, rider;
     if (MEM32(rec + 0x0C) == 0xFFFFFFFFu)
         return 0;
@@ -811,7 +811,7 @@ static uint32_t player_cash_va(int *rider_out)
         return 0;
     if (rider_out)
         *rider_out = rider;
-    return 0x003474B4u + (uint32_t)(slot * 10 + rider) * 0xF88u;
+    return VA(0x003474B4) + (uint32_t)(slot * 10 + rider) * 0xF88u;
 }
 
 static int s_money_key_pending;          /* the next change is the money key's */
@@ -840,9 +840,9 @@ static void money_watch(void)
     static uint32_t last_va;
     static int32_t last, run_gain;   /* cash picked up in game, said once out of it */
     int rider = -1;
-    uint32_t va = player_cash_va(&rider), app = MEM32(0x003A930Cu),
+    uint32_t va = player_cash_va(&rider), app = MEM32(VA(0x003A930C)),
              st = app >= 0x10000u ? MEM32(app + 4) : 0;
-    int ingame = st >= 0x10000u && MEM32(st) == 0x00299D7Cu;
+    int ingame = st >= 0x10000u && MEM32(st) == VA(0x00299D7C);
     int32_t now;
     if (run_gain && (!ingame || !va)) {
         log_msg(LOG_INFO, "PLAY", "picked up %d on the mountain (money now %d)", run_gain, last);
@@ -1106,7 +1106,7 @@ void sub_00205D40(void)
  * sub_00204400 never ran: it is a jump target inside its parent.) */
 extern void sub_00202460_gen(void);
 volatile uint32_t g_ssx3_ui_screen_vt, g_ssx3_ui_screen_id, g_ssx3_ui_screen_ptr;
-#define SSX3_HUD_SCREEN_VT 0x00293000u  /* in-game HUD: re-activates all the time */
+#define SSX3_HUD_SCREEN_VT VA(0x00293000)  /* in-game HUD: re-activates all the time */
 
 /* The last screen other than the HUD activated during a race: the briefing
  * (00297E30), the pause menu (002981D8), the Quit dialog (00297B60) and the
@@ -1169,22 +1169,22 @@ static void ingame_menu_note(uint32_t scr)
 static const char *screen_name(uint32_t vt, uint32_t id, int in_menus)
 {
     switch (vt) {
-    case 0x0028EFC0u: return "title screen";
-    case 0x00293AC0u: return "Buy Attributes";
-    case 0x00289530u: return "dialog";
-    case 0x002884C0u: return "name keyboard";
-    case 0x00288F08u: return "message box";
-    case 0x00297E30u: return "race briefing";
-    case 0x00297F68u: return "one-on-one briefing";
-    case 0x00297E98u: return "freestyle briefing";
-    case 0x002981D8u: return "pause menu";
-    case 0x00297B60u: return "quit dialog";
-    case 0x00298650u: return "lodge / station prompt";
-    case 0x002938C0u: return "lodge";
-    case 0x002984B0u: return "run result";
-    case 0x00298378u: return "event results";
-    case 0x00298448u: return "race end";
-    case 0x0028B428u: return "checking hard disk";
+    case VA(0x0028EFC0): return "title screen";
+    case VA(0x00293AC0): return "Buy Attributes";
+    case VA(0x00289530): return "dialog";
+    case VA(0x002884C0): return "name keyboard";
+    case VA(0x00288F08): return "message box";
+    case VA(0x00297E30): return "race briefing";
+    case VA(0x00297F68): return "one-on-one briefing";
+    case VA(0x00297E98): return "freestyle briefing";
+    case VA(0x002981D8): return "pause menu";
+    case VA(0x00297B60): return "quit dialog";
+    case VA(0x00298650): return "lodge / station prompt";
+    case VA(0x002938C0): return "lodge";
+    case VA(0x002984B0): return "run result";
+    case VA(0x00298378): return "event results";
+    case VA(0x00298448): return "race end";
+    case VA(0x0028B428): return "checking hard disk";
     default: break;
     }
     if (!in_menus)
@@ -1217,8 +1217,8 @@ static const char *screen_name(uint32_t vt, uint32_t id, int in_menus)
  * screen: widget list head at +0x24+0xC, next at +8) keeps the selected row
  * at +0x95 -- 0 Single Event, 1 Conquer the Mountain, 2 Multi Play,
  * 3 Previews. Read when the main menu gives way to the next screen. */
-#define SSX3_MAIN_MENU_VT 0x0028F060u
-#define SSX3_LIST_VT      0x002F8958u
+#define SSX3_MAIN_MENU_VT VA(0x0028F060)
+#define SSX3_LIST_VT      VA(0x002F8958)
 static void main_menu_left(uint32_t mm)
 {
     static const char *const k_modes[4] = {"Single Event", "Conquer the Mountain", "Multi Play", "Previews"};
@@ -1248,12 +1248,12 @@ static void main_menu_left(uint32_t mm)
 static const char *screen_name_now(void)
 {
     static char buf[48];
-    uint32_t app = MEM32(0x003A930Cu), st = app >= 0x10000u ? MEM32(app + 4) : 0;
-    int in_menus = st >= 0x10000u && MEM32(st) == 0x00289618u;
+    uint32_t app = MEM32(VA(0x003A930C)), st = app >= 0x10000u ? MEM32(app + 4) : 0;
+    int in_menus = st >= 0x10000u && MEM32(st) == VA(0x00289618);
     const char *nm;
     if (!g_ssx3_ui_screen_vt)
         return "no screen yet";
-    if (!in_menus && st >= 0x10000u && MEM32(st) == 0x00299D7Cu
+    if (!in_menus && st >= 0x10000u && MEM32(st) == VA(0x00299D7C)
         && (!s_ingame_menu || !ssx3_InGameMenuUp()))
         return "in game";
     nm = screen_name(g_ssx3_ui_screen_vt, g_ssx3_ui_screen_id, in_menus);
@@ -1276,12 +1276,12 @@ extern volatile int g_ssx3_event_result, g_ssx3_events_finished;   /* game_state
 
 static void event_result_note(void)
 {
-    int kind = (int8_t)MEM8(0x00367F90u), players = MEM8(0x00367F91u), slot = -1, i, n, place,
+    int kind = (int8_t)MEM8(VA(0x00367F90)), players = MEM8(VA(0x00367F91)), slot = -1, i, n, place,
         score, round = 0;
-    uint32_t mgr = MEM32(0x00369534u), p;
+    uint32_t mgr = MEM32(VA(0x00369534)), p;
     char what[48], extra[48];
     for (i = 0; i < 6 && slot < 0; i++)
-        if ((int32_t)MEM32(0x00367FDCu + (MEM32(0x00346400u + i * 4) & 0x1F) * 32) > -1)
+        if ((int32_t)MEM32(VA(0x00367FDC) + (MEM32(VA(0x00346400) + i * 4) & 0x1F) * 32) > -1)
             slot = i;
     if (slot < 0) {
         log_msg(LOG_DEBUG, "PLAY", "event results: player 1 not found");
@@ -1299,11 +1299,11 @@ static void event_result_note(void)
     if (!g_ssx3_event_result)
         g_ssx3_events_finished++;
     g_ssx3_event_result = 1;
-    place = (int)MEM32(0x00369458u + slot * 4);
-    score = (int)MEM32(0x00369408u + slot * 4);
+    place = (int)MEM32(VA(0x00369458) + slot * 4);
+    score = (int)MEM32(VA(0x00369408) + slot * 4);
     log_msg(LOG_DEBUG, "PLAY", "event results: kind %d players %d round %d slot %d place %d score %d "
             "riders %d dnf %d platinum %d", kind, players, round, slot, place, score, n,
-            MEM8(0x003693FCu + slot), MEM8(0x0036860Bu));
+            MEM8(VA(0x003693FC) + slot), MEM8(VA(0x0036860B)));
     if (kind == 0 || kind == 5)
         snprintf(what, sizeof what, "time %d:%05.2f", score / 3600, (score % 3600) / 60.0);
     else
@@ -1311,11 +1311,11 @@ static void event_result_note(void)
     extra[0] = 0;
     if (kind == 0 && round >= 1 && round < 3)
         snprintf(extra, sizeof extra, ", round %d of 3", round);
-    else if (kind != 5 && kind != 6 && MEM8(0x0036860Bu))
+    else if (kind != 5 && kind != 6 && MEM8(VA(0x0036860B)))
         snprintf(extra, sizeof extra, ", platinum medal");
     else if (kind != 5 && kind != 6 && place >= 0 && place < 3)
         snprintf(extra, sizeof extra, ", %s medal", place == 0 ? "gold" : place == 1 ? "silver" : "bronze");
-    if (MEM8(0x003693FCu + slot))
+    if (MEM8(VA(0x003693FC) + slot))
         log_msg(LOG_INFO, "PLAY", "event result: did not finish%s", extra);
     else if (kind == 5 || kind == 6)
         log_msg(LOG_INFO, "PLAY", "event result: %s, %s", place == 0 ? "won" : "lost", what);
@@ -1334,8 +1334,8 @@ static void screen_note(uint32_t scr)
         uint32_t vt = MEM32(scr), id = MEM32(scr + 0xC);
         g_ssx3_ui_screen_ptr = scr;
         if (vt != g_ssx3_ui_screen_vt || id != g_ssx3_ui_screen_id) {
-            uint32_t app = MEM32(0x003A930Cu), st = app >= 0x10000u ? MEM32(app + 4) : 0;
-            int in_menus = st >= 0x10000u && MEM32(st) == 0x00289618u;   /* frontend */
+            uint32_t app = MEM32(VA(0x003A930C)), st = app >= 0x10000u ? MEM32(app + 4) : 0;
+            int in_menus = st >= 0x10000u && MEM32(st) == VA(0x00289618);   /* frontend */
             const char *nm = screen_name(vt, id, in_menus);
             g_ssx3_ui_screen_vt = vt;
             g_ssx3_ui_screen_id = id;
@@ -1345,9 +1345,9 @@ static void screen_note(uint32_t scr)
                 log_msg(LOG_INFO, "PLAY", "screen %08X:%d (not named yet)", vt, (int)id);
             else
                 log_msg(LOG_INFO, "PLAY", "in-game screen %08X (not named yet)", vt);
-            if (vt == 0x00298378u)
+            if (vt == VA(0x00298378))
                 event_result_note();
-            if (vt == 0x00297E30u || vt == 0x00297F68u || vt == 0x00297E98u) {
+            if (vt == VA(0x00297E30) || vt == VA(0x00297F68) || vt == VA(0x00297E98)) {
                 extern void ssx3_EventReady(void);   /* game_state.c: the load time */
                 ssx3_EventReady();
             }
@@ -1435,7 +1435,7 @@ void sub_0020CAB0(void)
                     (unsigned long)GetCurrentThreadId());
             for (k = 0; k < 24; k++) {          /* return addresses into .text */
                 uint32_t w = MEM32(g_esp + 4 * k);
-                if (w >= 0x00011000u && w < 0x00280000u)
+                if (w >= 0x00011000u && w < SSX3_CODE_END)
                     fprintf(stderr, " %08X", w);
             }
             fprintf(stderr, "\n[STREAM] regs eax %08X ebx %08X edx %08X esi %08X edi %08X ebp %08X\n",
@@ -1613,7 +1613,7 @@ void sub_0020C740(void)
         extra = e ? atoi(e) : 0;
     }
     if (extra > 0) {
-        static const uint32_t counts[3] = { 0x003432E0u, 0x003432ECu, 0x003432F8u };
+        static const uint32_t counts[3] = { VA(0x003432E0), VA(0x003432EC), VA(0x003432F8) };
         static int done;
         int k;
         if (!done++)
@@ -1736,7 +1736,7 @@ extern void sub_00177990_gen(void);
 void sub_0017A5A0(void)
 {
     uint32_t fd = ~MEM32(g_esp + 4), pos = MEM32(g_esp + 12), len = MEM32(g_esp + 16);
-    uint32_t tab = MEM32(0x0039E884u), ent = tab + fd * 20;
+    uint32_t tab = MEM32(VA(0x0039E884)), ent = tab + fd * 20;
     uint32_t cached = tab ? MEM32(ent + 4) : 0, base = tab ? MEM32(ent + 12) : 0;
     int log = strm_check_on() && tab && fd < 64;
     int slot = -1;
@@ -1753,7 +1753,7 @@ void sub_0017A5A0(void)
             const char *e = getenv("RECOMP_EA_FORCE_SEEK");
             force = !(e && *e == '0');
         }
-        if (force && tab && fd < MEM32(0x0039E880u) && MEM32(ent) != 0) {
+        if (force && tab && fd < MEM32(VA(0x0039E880)) && MEM32(ent) != 0) {
             uint32_t want = MEM32(g_esp + 12);
             ST32(ent + 4, (base ? base - want : want) ^ 1);
         }
@@ -1865,7 +1865,7 @@ void sub_001781B0(void)
     uint32_t op = MEM32(g_esp + 4), M = MEM32(g_esp + 12), req = MEM32(M + 0x70);
     uint32_t before = req ? MEM32(req + 4) : 0xFF;
     uint32_t pos0 = MEM32(M + 0x180);
-    int ov = ovl_enter(0x1781B0);
+    int ov = ovl_enter(VA(0x001781B0));
     strm_note('C', M, op, MEM32(M + 0x68), MEM32(M + 0x188), MEM32(M + 0x180), MEM32(M + 0x48));
     if (a) xbox_NoPreemptEnter();
     sub_001781B0_gen();
@@ -1905,7 +1905,7 @@ void sub_00178280(void)                 /* schedule the next read (M, n) */
 {
     int a = strm_atomic();
     uint32_t M = MEM32(g_esp + 4);
-    int ov = ovl_enter(0x178280);
+    int ov = ovl_enter(VA(0x00178280));
     strm_note('K', M, MEM32(M + 0x60), MEM32(M + 0x64), MEM32(M + 0x68), MEM32(M + 0x48), MEM32(M + 0x18C));
     if (a) xbox_NoPreemptEnter();
     sub_00178280_gen();
@@ -1943,7 +1943,7 @@ void sub_00177760(void)                 /* scan new blocks; eax = manager */
     int a = strm_parse_atomic();
     uint32_t M = g_eax, scan = MEM32(M + 0x64), wr = MEM32(M + 0x68);
     uint32_t tag = strm_ok(scan) ? MEM32(scan) : 0, sz = strm_ok(scan) ? MEM32(scan + 4) : 0;
-    int ov = ovl_enter(0x177760);
+    int ov = ovl_enter(VA(0x00177760));
     if (a) xbox_NoPreemptEnter();
     sub_00177760_gen();
     if (a) xbox_NoPreemptLeave();
@@ -1991,7 +1991,7 @@ void sub_00177F80(void)                 /* next chunk of stream h */
         if (req && MEM32(g_eax) == MEM32(req + 0x11C))
             for (k = 0; k < 8; k++) {
                 uint64_t o = ovl_inflight[k];
-                if (o && (uint32_t)(o >> 32) == 0x177760 && (uint32_t)o != tid)
+                if (o && (uint32_t)(o >> 32) == VA(0x00177760) && (uint32_t)o != tid)
                     fprintf(stderr, "[CEND-RACE] t=%lu t%u pulled end chunk %08X of req %08X while t%u parses\n",
                             (unsigned long)GetTickCount(), tid, g_eax, req, (uint32_t)o);
             }
@@ -2128,7 +2128,7 @@ void ssx3_StreamDump(void)
 {
     uint32_t S = s_strm_obj, mgr, hdr, ents, n, i, shown = 0;
     if (s_block_since) {
-        uint32_t dev = MEM32(0x0024B0D8u);
+        uint32_t dev = MEM32(VA(0x0024B0D8));
         fprintf(stderr, "[STREAMDUMP] BlockOnTime waiting %lu ms for time %08X | fence %08X cur %08X"
                 " wr %08X put %08X get %08X\n",
                 (unsigned long)(GetTickCount() - s_block_since), s_block_t,
@@ -2216,9 +2216,9 @@ void ssx3_StreamDump(void)
                 P, MEM32(P + 4), (int)MEM32(P + 8), MEM32(P), MEM32(P + 0x18), (int)MEM32(P + 0x1C),
                 MEM32(P + 0x14), MEM32(P + 0x2C), (int)MEM32(P + 0x30), MEM32(P + 0x28));
     }
-    fprintf(stderr, "[STREAMDUMP] %u busy entries; resource states 0x312AC8:", shown);
+    fprintf(stderr, "[STREAMDUMP] %u busy entries; resource states 0x%X:", shown, VA(0x00312AC8));
     for (i = 0; i < 64; i++)
-        fprintf(stderr, " %u", MEM32(0x00312AC8u + i * 16));
+        fprintf(stderr, " %u", MEM32(VA(0x00312AC8) + i * 16));
     fprintf(stderr, "\n");
     fflush(stderr);
 }
@@ -2365,7 +2365,7 @@ static DWORD WINAPI block_rescue_thread(LPVOID unused)
         }
         if (!since || since != s_block_since || now - since < 2)
             continue;
-        dev = MEM32(0x0024B0D8u);
+        dev = MEM32(VA(0x0024B0D8));
         if (!dev)
             continue;
         fence = MEM32(MEM32(dev + 0x30));
@@ -2409,7 +2409,7 @@ void sub_00234BE0(void)
          * record D3D keeps for it (dev+0x60 + ((t >> 1) & 63) * 8: time,
          * pushbuffer position) and the words at that position, where the
          * wake-up NOP gets patched in (+0x10..+0x1C). */
-        uint32_t dev = MEM32(0x0024B0D8u);
+        uint32_t dev = MEM32(VA(0x0024B0D8));
         if (t != last_t) {
             repeats = 0;
             last_t = t;
@@ -2536,7 +2536,7 @@ static void trace_ret(const char *name, void (*fn)(void), volatile LONG *n,
     fn();
     ret = (long)(g_eax & 0xFF);
     if (ret != *last || (k & 63) == 0) {
-        im = MEM32(0x0036952C);
+        im = MEM32(VA(0x0036952C));
         fprintf(stderr, "  [GATE] %s #%ld -> %ld  t=%lu  ring r=%u w=%u"
                 "  edi_in=%08X esi_in=%08X ebx_in=%08X\n",
                 name, k, ret, GetTickCount(),
@@ -2625,7 +2625,7 @@ void *ssx3_lookup_trace(uint32_t va)
 
     if (stats < 0)
         stats = getenv("RECOMP_FRAMETIMER_STATS") != NULL;
-    if (stats && va == 0x001AE020)
+    if (stats && va == VA(0x001AE020))
         return frametimer_stats;
 
     if (on < 0)
@@ -2633,15 +2633,15 @@ void *ssx3_lookup_trace(uint32_t va)
     if (!on)
         return NULL;
     switch (va) {
-    case 0x001AE020: return traced_sub_001AE020;
-    case 0x001ADF40: return traced_sub_001ADF40;
-    case 0x001ADF50: return traced_sub_001ADF50;
-    case 0x001ADF60: return traced_sub_001ADF60;
-    case 0x001ADF70: return traced_sub_001ADF70;
-    case 0x001ADF90: return traced_sub_001ADF90;
-    case 0x000E1AE0: return traced_sub_000E1AE0;
-    case 0x000E1A80: return traced_sub_000E1A80;
-    case 0x000D7460: return traced_sub_000D7460;
+    case VA(0x001AE020): return traced_sub_001AE020;
+    case VA(0x001ADF40): return traced_sub_001ADF40;
+    case VA(0x001ADF50): return traced_sub_001ADF50;
+    case VA(0x001ADF60): return traced_sub_001ADF60;
+    case VA(0x001ADF70): return traced_sub_001ADF70;
+    case VA(0x001ADF90): return traced_sub_001ADF90;
+    case VA(0x000E1AE0): return traced_sub_000E1AE0;
+    case VA(0x000E1A80): return traced_sub_000E1A80;
+    case VA(0x000D7460): return traced_sub_000D7460;
     }
     return NULL;
 }
@@ -2703,11 +2703,11 @@ void sub_001BD300(void)
     uint32_t cap = MEM32(desc + 0x28);
     PUSH32(g_esp, node);
     g_ecx = desc;
-    PUSH32(g_esp, 0x001BD30Eu);       /* a return address inside the original */
+    PUSH32(g_esp, VA(0x001BD30E));       /* a return address inside the original */
     sub_001BD0C0();                   /* ret 4 */
     PUSH32(g_esp, node);
     g_ecx = desc + 0x10;
-    PUSH32(g_esp, 0x001BD317u);
+    PUSH32(g_esp, VA(0x001BD317));
     sub_001BD170();                   /* ret 4 */
     for (o = MEM32(node + 0x28); o; o = MEM32(o)) {
         uint32_t cnt = MEM32(desc + 0x24), n = MEM32(cnt);

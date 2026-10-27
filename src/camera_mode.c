@@ -47,9 +47,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VT_INGAME   0x00299D7Cu
-#define VT_RIDERMAN 0x0028216Cu
-#define VT_CAMERA   0x0028630Cu
+#define VT_INGAME   VA(0x00299D7C)
+#define VT_RIDERMAN VA(0x0028216C)
+#define VT_CAMERA   VA(0x0028630C)
 #define CAM_SAVE    0x70u            /* +0x30 .. +0xA0: eye, quaternion, view, forward */
 
 extern uint32_t xbox_TickCountMs(void);
@@ -127,7 +127,7 @@ static void cam_init(void)
 /* Player 1's rider while the race is on, and the chase camera. */
 static uint32_t player_and_camera(uint32_t state, uint32_t *cam, int *mode)
 {
-    uint32_t g = MEM32(0x00369534u), a, m, b, pm, phys, c;
+    uint32_t g = MEM32(VA(0x00369534)), a, m, b, pm, phys, c;
     if (!guest_ok(state) || MEM32(state) != VT_INGAME)
         return 0;
     if (!guest_ok(g) || !guest_ok(a = MEM32(g + 0x74)) || !guest_ok(m = MEM32(a + 0xC))

@@ -156,7 +156,7 @@ static void xbe_line(const uint8_t *xbe, size_t size, const char *game_dir)
     log_msg(LOG_INFO, "SYSTEM", "game: \"%s\", title id %08X, version %u, %zu bytes, folder %s",
             name, id, ver, size, game_dir);
     if (id != 0x4541003Cu)
-        log_msg(LOG_WARN, "SYSTEM", "this is not SSX 3 PAL (4541003C): expect trouble");
+        log_msg(LOG_WARN, "SYSTEM", "this is not SSX 3 (4541003C): expect trouble");
 }
 
 /* The launcher's choices, by name, from the RECOMP_* settings in effect. */

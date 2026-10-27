@@ -32,21 +32,21 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define APP_PTR_VA 0x003A930Cu
+#define APP_PTR_VA VA(0x003A930C)
 #define SSX3_RIDERS 8               /* rider slots looked at (a race has 6) */
 
 static const struct { uint32_t vt; const char *name; } k_states[] = {
     /* Learned by watching a run through every screen (tools\to_race.ps1
      * prints the state for each new screen; CLAUDE.md has the table). */
-    { 0x0029AD1Cu, "boot" },
-    { 0x0029ACD8u, "intro" },        /* EA / intro movies */
-    { 0x00289618u, "frontend" },     /* every menu, title to rules */
-    { 0x0029AD48u, "event_enter" },  /* brief transition into an event */
-    { 0x0029B0DCu, "loading" },      /* race loading screens */
-    { 0x00299D7Cu, "ingame" },       /* briefing, race, results, replay */
-    { 0x0028825Cu, "debugmenu" },    /* EA's quick-start menu (RECOMP_DEBUG_MENU) */
-    { 0x0029B0F8u, "to_frontend" },  /* leaving an event for the menus / a lodge */
-    { 0x0029AD64u, "event_exit" },   /* after Quit -> Yes in the pause menu */
+    { VA(0x0029AD1C), "boot" },
+    { VA(0x0029ACD8), "intro" },        /* EA / intro movies */
+    { VA(0x00289618), "frontend" },     /* every menu, title to rules */
+    { VA(0x0029AD48), "event_enter" },  /* brief transition into an event */
+    { VA(0x0029B0DC), "loading" },      /* race loading screens */
+    { VA(0x00299D7C), "ingame" },       /* briefing, race, results, replay */
+    { VA(0x0028825C), "debugmenu" },    /* EA's quick-start menu (RECOMP_DEBUG_MENU) */
+    { VA(0x0029B0F8), "to_frontend" },  /* leaving an event for the menus / a lodge */
+    { VA(0x0029AD64), "event_exit" },   /* after Quit -> Yes in the pause menu */
     { 0, NULL }
 };
 
@@ -56,7 +56,7 @@ static const struct { uint32_t vt; const char *name; } k_states[] = {
  * 14-16 the peak runs (Happiness, Ruthless, The Throne). Found by dumping
  * .data at each event's briefing (docs/LOGGING.md); names from
  * data/be/rwrdxbx.dat and the briefing panels. */
-#define EVENT_ID_VA   0x00346440u
+#define EVENT_ID_VA   VA(0x00346440)
 static const struct { int peak; const char *kind, *name; } k_events[17] = {
     {1, "Race", "Snow Jam"}, {1, "Race", "Metro City"},
     {2, "Race", "Ruthless Ridge"}, {2, "Race", "Intimidator"}, {3, "Race", "Gravitude"},
@@ -123,15 +123,15 @@ static void event_note(void)
 static const char *state_words(uint32_t vt)
 {
     switch (vt) {
-    case 0x0029AD1Cu: return "starting up";
-    case 0x0029ACD8u: return "intro movies";
-    case 0x00289618u: return "menus";
-    case 0x0029AD48u: return "entering an event";
-    case 0x0029B0DCu: return "loading";
-    case 0x00299D7Cu: return "in game";
-    case 0x0028825Cu: return "debug quick-start menu";
-    case 0x0029B0F8u: return "leaving the event";
-    case 0x0029AD64u: return "quitting the event";
+    case VA(0x0029AD1C): return "starting up";
+    case VA(0x0029ACD8): return "intro movies";
+    case VA(0x00289618): return "menus";
+    case VA(0x0029AD48): return "entering an event";
+    case VA(0x0029B0DC): return "loading";
+    case VA(0x00299D7C): return "in game";
+    case VA(0x0028825C): return "debug quick-start menu";
+    case VA(0x0029B0F8): return "leaving the event";
+    case VA(0x0029AD64): return "quitting the event";
     case 0:           return "nothing yet";
     default:          return "an unknown state";
     }
@@ -168,7 +168,7 @@ static void fe_probe(uint32_t cur, uint32_t vt, DWORD t)
         const char *e = getenv("RECOMP_FE_PROBE");
         on = e && e[0] == '1';
     }
-    if (!on || vt != 0x00289618u || !guest_ok(cur) || !guest_ok(cur + FE_PROBE_BYTES))
+    if (!on || vt != VA(0x00289618) || !guest_ok(cur) || !guest_ok(cur + FE_PROBE_BYTES))
         return;
     static uint32_t prev_vt[FE_PROBE_BYTES / 4];
     for (i = 0; i < FE_PROBE_BYTES / 4; i++) {
@@ -181,7 +181,7 @@ static void fe_probe(uint32_t cur, uint32_t vt, DWORD t)
          * swapped for another shows as its vtable changing. */
         if (guest_ok(v) && v >= 0x80000000u) {
             uint32_t w = MEM32(v);
-            if (w >= 0x00280000u && w < 0x00340000u)
+            if (w >= SSX3_VTABLE_LO && w < SSX3_VTABLE_HI)
                 pvt = w;
         }
         if (cur == prev_cur && pvt != prev_vt[i] && (pvt || prev_vt[i]))
@@ -234,18 +234,18 @@ static DWORD WINAPI game_state_thread(LPVOID unused)
                 log_msg(LOG_INFO, "PLAY", "%s", state_words(vt));
             vt_since = now;
             vt_prev = vt;
-            if (last_vt == 0x00299D7Cu) {
+            if (last_vt == VA(0x00299D7C)) {
                 extern void ssx3_PerfEvent(const char *name);
                 event_left();
                 ssx3_PerfEvent(NULL);     /* this event's frame times */
             }
-            if (vt == 0x00289618u || vt == 0x0028825Cu)   /* back in the menus: not a restart */
+            if (vt == VA(0x00289618) || vt == VA(0x0028825C))   /* back in the menus: not a restart */
                 s_left_id = 0xFFFFFFFFu;
             /* entering an event / loading (the sampler can miss the short
              * first): its load starts */
-            if ((vt == 0x0029AD48u || vt == 0x0029B0DCu) && !s_enter_ms)
+            if ((vt == VA(0x0029AD48) || vt == VA(0x0029B0DC)) && !s_enter_ms)
                 s_enter_ms = now ? now : 1;
-            if (vt == 0x00299D7Cu)        /* in game: which event */
+            if (vt == VA(0x00299D7C))        /* in game: which event */
                 event_note();
         }
         if (vt != last_vt || next != last_next || sub != last_sub) {
@@ -290,7 +290,7 @@ static DWORD WINAPI game_state_thread(LPVOID unused)
 int ssx3_InGameNow(void)
 {
     uint32_t app = MEM32(APP_PTR_VA), cur;
-    return guest_ok(app) && guest_ok(cur = MEM32(app + 4)) && MEM32(cur) == 0x00299D7Cu;
+    return guest_ok(app) && guest_ok(cur = MEM32(app + 4)) && MEM32(cur) == VA(0x00299D7C);
 }
 
 /* Where the game is, in words, for the player mark (mark.c): the top-level
@@ -301,9 +301,9 @@ void ssx3_WhereNow(char *out, size_t n)
     if (guest_ok(app) && guest_ok(cur = MEM32(app + 4)))
         vt = MEM32(cur);
     id = MEM32(EVENT_ID_VA);
-    if (vt == 0x00299D7Cu && id < 17)
+    if (vt == VA(0x00299D7C) && id < 17)
         snprintf(out, n, "in game, Peak %d %s %s", k_events[id].peak, k_events[id].kind, k_events[id].name);
-    else if (vt == 0x00299D7Cu && id == 17)
+    else if (vt == VA(0x00299D7C) && id == 17)
         snprintf(out, n, "in game, free ride");
     else
         snprintf(out, n, "%s", state_words(vt));
@@ -325,11 +325,11 @@ void ssx3_GameStateStart(void)
  * counts when its object has one of those two vtables. 0 outside a race. */
 int ssx3_RiderPos(int i, float out[3])
 {
-    uint32_t g = MEM32(0x00369534u), a, m, b, b0;
+    uint32_t g = MEM32(VA(0x00369534)), a, m, b, b0;
     if (i < 0 || i >= SSX3_RIDERS || !guest_ok(g) || !guest_ok(a = MEM32(g + 0x74))
-            || !guest_ok(m = MEM32(a + 0xC)) || MEM32(m) != 0x0028216Cu
+            || !guest_ok(m = MEM32(a + 0xC)) || MEM32(m) != VA(0x0028216C)
             || !guest_ok(b0 = MEM32(m + 0x28)) || !guest_ok(b = MEM32(m + 0x28 + 4u * (uint32_t)i))
-            || (MEM32(b) != MEM32(b0) && MEM32(b) != 0x00282520u))
+            || (MEM32(b) != MEM32(b0) && MEM32(b) != VA(0x00282520)))
         return 0;
     out[0] = MEMF(b + 0x180);
     out[1] = MEMF(b + 0x184);

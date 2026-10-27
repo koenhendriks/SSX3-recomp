@@ -22,9 +22,15 @@ XBE="$(realpath "$XBE")"
 ANALYSIS="$(dirname "$XBE")/default_analysis.json"
 # DOLBY is DSP56300 microcode for the audio chip, not x86: never disassemble it.
 SECTIONS=(--text-only --extra-sections D3D,D3DX,XGRPH,DSOUND,XPP)
+# Which build the XBE is (tools/xbe_port/port.py): the hand-written code uses
+# PAL addresses, and a port file maps them to another build's. This writes
+# port_map.h, the seeds and the override file to scan, in the build's addresses.
+PORT="$HERE/work/port"
+VARIANT="$("$PY" -I "$HERE/tools/xbe_port/port.py" "$XBE" "$HERE" "$PORT")"
+echo "build: $VARIANT"
 # Entry points only reached through function pointers, measured at runtime
 # ([ICALL] Failed to resolve VA ...). Both disasm and the split need them.
-SEEDS=(--seed-functions "$HERE/analysis/icall_seeds.json")
+SEEDS=(--seed-functions "$PORT/icall_seeds.json")
 
 cd "$TK"
 if [ "${1:-all}" = all ]; then
@@ -35,13 +41,17 @@ if [ "${1:-all}" = all ]; then
     # 143 FidDb names from Ghidra 12.1.4 (analysis/ghidra_names.json), applied
     # without needing Ghidra. tools.disasm rewrites functions.json, so this
     # must follow it every time.
-    "$PY" tools/ghidra_naming/merge_names.py --names-json "$HERE/analysis/ghidra_names.json" --apply
+    # The names are at PAL addresses: on another build they would land on the wrong functions.
+    if [ "$VARIANT" = pal ]; then
+        "$PY" tools/ghidra_naming/merge_names.py --names-json "$HERE/analysis/ghidra_names.json" --apply
+    fi
     # tools.split ignores names in functions.json; split_named.py does not.
     "$PY" "$HERE/tools/split_named.py" --xboxrecomp "$TK" "$XBE" --out "$HERE/decomp" "${SECTIONS[@]}" "${SEEDS[@]}"
 fi
 "$PY" -m tools.recomp "$XBE" --all --split 250 --game-name "SSX 3" \
     --gen-dir "$HERE/src/recomp/gen" \
-    --exclude-manual "$HERE/src/ssx3_overrides.c"
+    --exclude-manual "$PORT/ssx3_overrides.c"
+cp "$PORT/port_map.h" "$HERE/src/recomp/gen/port_map.h"
 # Stores through MEMn become explicit STn(addr, value): the wasm build checks
 # device addresses on every access and needs MEMn to be an rvalue (see the
 # script). Same meaning natively.

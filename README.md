@@ -2,7 +2,8 @@
 
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/434-ssx-3/)
 
-Static recompilation of **SSX 3** (original Xbox, PAL) into a native program
+Static recompilation of **SSX 3** (original Xbox, PAL; NTSC-U from source, see
+[docs/PORTS.md](docs/PORTS.md)) into a native program
 for **Windows and Linux**, built with
 [xboxrecomp](https://github.com/sp00nznet/xboxrecomp). The game's own code
 runs as native code, and the Xbox GPU is emulated on Vulkan. It plays at
@@ -83,7 +84,7 @@ Other new things:
 ## Play
 
 On Windows, after building, start **`build\launcher.exe`**: browse to the
-folder of your SSX 3 rip (it checks that `default.xbe` is SSX 3 PAL), pick
+folder of your SSX 3 rip (it checks that `default.xbe` is the build it was made from), pick
 resolution, aspect ratio, fullscreen, CRT shader, FPS counter, intro
 movies and the debug quick-start menu, see which controllers are
 connected, and press Play. The choices are kept in `launcher.ini`.

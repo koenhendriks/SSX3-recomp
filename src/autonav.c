@@ -35,15 +35,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define APP_PTR_VA    0x003A930Cu
-#define VT_FRONTEND   0x00289618u
-#define VT_EVENTENTER 0x0029AD48u
-#define VT_LOADING    0x0029B0DCu
-#define VT_INGAME     0x00299D7Cu
-#define VT_BRIEFING   0x00297E30u   /* race briefing panel (ui screen) */
-#define VT_BRIEFING2  0x00297F68u   /* briefing of a one-on-one race (The Throne) */
-#define VT_PAUSE      0x002981D8u   /* pause menu */
-#define VT_QUIT       0x00297B60u   /* quit dialog */
+#define APP_PTR_VA    VA(0x003A930C)
+#define VT_FRONTEND   VA(0x00289618)
+#define VT_EVENTENTER VA(0x0029AD48)
+#define VT_LOADING    VA(0x0029B0DC)
+#define VT_INGAME     VA(0x00299D7C)
+#define VT_BRIEFING   VA(0x00297E30)   /* race briefing panel (ui screen) */
+#define VT_BRIEFING2  VA(0x00297F68)   /* briefing of a one-on-one race (The Throne) */
+#define VT_PAUSE      VA(0x002981D8)   /* pause menu */
+#define VT_QUIT       VA(0x00297B60)   /* quit dialog */
 
 extern int xbox_PadInject(const char *line);
 extern volatile uint32_t g_ssx3_ui_screen_vt, g_ssx3_ui_screen_id, g_ssx3_ui_screen_ptr;
@@ -127,7 +127,7 @@ static DWORD WINAPI autonav_thread(LPVOID unused)
              * (00297E30 races, 00297F68 one-on-one, others for the other
              * event types); never the pause menu or the quit dialog. The
              * HUD is not recorded as a screen at all. */
-            if (sp && sst == 5 && (g_ssx3_ui_screen_vt & 0xFFFF0000u) == 0x00290000u
+            if (sp && sst == 5 && (g_ssx3_ui_screen_vt & 0xFFFF0000u) == SSX3_OVERLAY_PAGE
                 && g_ssx3_ui_screen_vt != VT_PAUSE && g_ssx3_ui_screen_vt != VT_QUIT
                 && sp != pre_ingame_sp) {
                 if (!brief_since)

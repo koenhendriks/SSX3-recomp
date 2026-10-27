@@ -9,7 +9,8 @@ SSX 3 -- static recompilation for Windows
    included here.
 
 3. Run launcher.exe, press Browse and pick the folder that holds
-   default.xbe. The launcher checks that it is SSX 3 (PAL).
+   default.xbe. The launcher checks that it is SSX 3 (PAL). This download
+   plays the PAL disc only; for NTSC-U, build from source (docs/PORTS.md).
    Choose resolution, aspect ratio, CRT shader and so on, then press Play.
 
 Requirements

@@ -139,7 +139,7 @@ extern ptrdiff_t g_xbox_mem_offset;
  * TODO: Set these from your xbe_parser output.
  * Run: py -3 -m tools.xbe_parser game/default.xbe
  */
-#define YOUR_GAME_ENTRY_POINT   0x00181AD2  /* XBE entry point VA */
+#define YOUR_GAME_ENTRY_POINT   VA(0x00181AD2)  /* XBE entry point VA */
 #define YOUR_GAME_XBE_PATH      "game/default.xbe"
 #define YOUR_GAME_DIR            "game"
 
@@ -957,8 +957,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (!(skip && skip[0] == '0')) {
             const char *poke = getenv("RECOMP_POKE");
             char buf[256];
-            snprintf(buf, sizeof buf, "%s%s0x3083B8:0", poke && *poke ? poke : "",
-                     poke && *poke ? "," : "");
+            snprintf(buf, sizeof buf, "%s%s0x%X:0", poke && *poke ? poke : "",
+                     poke && *poke ? "," : "", VA(0x003083B8));
             _putenv_s("RECOMP_POKE", buf);
         }
     }
@@ -1067,6 +1067,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     printf("XBE loaded: %zu bytes\n", xbe_size);
     journal_session_header(xbe_data, xbe_size, s_game_dir);
 
+    /* This program was lifted from one disc (tools/xbe_port/port.py). Another
+     * build of SSX 3 has the same title id but runs at other addresses: refuse
+     * it instead of starting mid-function. The header's entry point is XORed
+     * with the retail or the debug key. */
+    {
+        uint32_t ent = 0;
+        if (xbe_size >= 0x12C)
+            memcpy(&ent, (const uint8_t *)xbe_data + 0x128, 4);
+        if ((ent ^ 0xA8FC57ABu) != YOUR_GAME_ENTRY_POINT && (ent ^ 0x94859D4Bu) != YOUR_GAME_ENTRY_POINT) {
+            log_msg(LOG_CRITICAL, "SYSTEM", "default.xbe is another build of SSX 3 than this program (%s): "
+                    "run scripts/regen for it (docs/PORTS.md)", SSX3_BUILD_NAME);
+            MessageBoxA(NULL, "This default.xbe is another build of SSX 3 than this program was made for ("
+                        SSX3_BUILD_NAME ").\nRun scripts/regen for it (docs/PORTS.md).",
+                        "Recomp", MB_ICONERROR);
+            free(xbe_data);
+            return 1;
+        }
+    }
+
     /* Step 2: Initialize Xbox memory layout */
     printf("Initializing Xbox memory layout...\n");
     if (!xbox_MemoryLayoutInit(xbe_data, xbe_size)) {
@@ -1147,7 +1166,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * with the submitted one at device+0x2C. The device pointer lives at
      * 0x0024B0D8. Nothing executes the pushbuffer on the GPU here, so all
      * submitted work is complete; mirror that so the wait terminates. */
-    xbox_Nv2aMirrorFence(0x0024B0D8, 0x2C, 0x30);
+    xbox_Nv2aMirrorFence(VA(0x0024B0D8), 0x2C, 0x30);
 
 #ifdef SSX3_VULKAN
     {

@@ -28,10 +28,17 @@ $xbe = (Resolve-Path $xbe).Path
 $analysis = Join-Path (Split-Path -Parent $xbe) "default_analysis.json"
 # DOLBY is DSP56300 microcode for the audio chip, not x86: never disassemble it.
 $sections = @("--text-only", "--extra-sections", "D3D,D3DX,XGRPH,DSOUND,XPP")
-# Entry points only reached through function pointers, measured at runtime.
-$seeds = @("--seed-functions", (Join-Path $here "analysis\icall_seeds.json"))
-
 function Py { & $py @args; if ($LASTEXITCODE) { throw "python $($args[0..1] -join ' ') failed" } }
+
+# Which build the XBE is (tools\xbe_port\port.py): the hand-written code uses
+# PAL addresses, and a port file maps them to another build's. This writes
+# port_map.h, the seeds and the override file to scan, in the build's addresses.
+$port = Join-Path $here "work\port"
+$variant = (& $py -I (Join-Path $here "tools\xbe_port\port.py") $xbe $here $port)
+if ($LASTEXITCODE) { throw "tools\xbe_port\port.py failed" }
+"build: $variant"
+# Entry points only reached through function pointers, measured at runtime.
+$seeds = @("--seed-functions", (Join-Path $port "icall_seeds.json"))
 
 Push-Location $tk
 try {
@@ -42,11 +49,15 @@ try {
         Py -m tools.abi_analysis $xbe
         # 143 FidDb names from Ghidra (analysis\ghidra_names.json), applied
         # without Ghidra; must follow tools.disasm, which rewrites functions.json.
-        Py tools\ghidra_naming\merge_names.py --names-json (Join-Path $here "analysis\ghidra_names.json") --apply
+        # The names are at PAL addresses: on another build they would land on the wrong functions.
+        if ($variant -eq "pal") {
+            Py tools\ghidra_naming\merge_names.py --names-json (Join-Path $here "analysis\ghidra_names.json") --apply
+        }
         Py (Join-Path $here "tools\split_named.py") --xboxrecomp $tk $xbe --out (Join-Path $here "decomp") @sections @seeds
     }
     Py -m tools.recomp $xbe --all --split 250 --game-name "SSX 3" `
         --gen-dir (Join-Path $here "src\recomp\gen") `
-        --exclude-manual (Join-Path $here "src\ssx3_overrides.c")
+        --exclude-manual (Join-Path $port "ssx3_overrides.c")
+    Copy-Item (Join-Path $port "port_map.h") (Join-Path $here "src\recomp\gen\port_map.h")
 } finally { Pop-Location }
 "regen done ($Step)"

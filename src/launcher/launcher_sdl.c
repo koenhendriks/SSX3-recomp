@@ -42,7 +42,9 @@
 extern char **environ;
 
 #define GAME_EXE   "ssx3_recomp"
-#define TITLE_ID   0x4541003Cu      /* SSX 3, PAL: what this build was made from */
+#define TITLE_ID   0x4541003Cu      /* SSX 3: PAL and NTSC-U share it (regen picks the build) */
+#define XBE_ENTRY_KEY_RETAIL 0xA8FC57ABu   /* the header's entry point is XORed with one */
+#define XBE_ENTRY_KEY_DEBUG  0x94859D4Bu
 #define WIN_W      560
 
 typedef struct { const char *label, *value; } Choice;
@@ -196,8 +198,9 @@ static int dir_exists(const char *p)
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-/* Reads the XBE certificate: title id and name. 0 = not an XBE. */
-static int read_xbe(const char *path, unsigned *title_id, char *name, size_t name_size)
+/* Reads the XBE certificate (title id, name) and the entry point, which tells
+ * builds with one title id apart. 0 = not an XBE. */
+static int read_xbe(const char *path, unsigned *title_id, unsigned *entry, char *name, size_t name_size)
 {
     unsigned char hdr[0x180], cert[0xA0];
     unsigned base, cert_va;
@@ -211,6 +214,7 @@ static int read_xbe(const char *path, unsigned *title_id, char *name, size_t nam
     }
     memcpy(&base, hdr + 0x104, 4);
     memcpy(&cert_va, hdr + 0x118, 4);
+    memcpy(entry, hdr + 0x128, 4);
     if (cert_va < base || fseek(f, (long)(cert_va - base), SEEK_SET)
         || fread(cert, 1, sizeof cert, f) != sizeof cert) {
         fclose(f);
@@ -234,7 +238,7 @@ static int read_xbe(const char *path, unsigned *title_id, char *name, size_t nam
 static int check_game(const char *dir, char *msg, size_t n)
 {
     char xbe[PATH_MAX + 16], data[PATH_MAX + 8], name[48];
-    unsigned id = 0;
+    unsigned id = 0, entry = 0;
     if (!*dir) {
         snprintf(msg, n, "Choose the folder of your SSX 3 game files (the one with default.xbe).");
         return 0;
@@ -246,7 +250,7 @@ static int check_game(const char *dir, char *msg, size_t n)
         snprintf(msg, n, "No default.xbe in this folder. Pick the folder that holds default.xbe and data/.");
         return 0;
     }
-    if (!read_xbe(xbe, &id, name, sizeof name)) {
+    if (!read_xbe(xbe, &id, &entry, name, sizeof name)) {
         snprintf(msg, n, "default.xbe could not be read (not an Xbox executable?).");
         return 0;
     }
@@ -258,11 +262,16 @@ static int check_game(const char *dir, char *msg, size_t n)
         return 0;
     }
     if (id != TITLE_ID) {
-        snprintf(msg, n, "This is %s (title %08X). This build needs SSX 3, PAL version (4541003C).",
+        snprintf(msg, n, "This is %s (title %08X). This build needs SSX 3 (4541003C).",
                  *name ? name : "another game", id);
         return 0;
     }
-    snprintf(msg, n, "Found %s (PAL). Ready to play.", name);
+    if ((entry ^ XBE_ENTRY_KEY_RETAIL) != VA(0x00181AD2) && (entry ^ XBE_ENTRY_KEY_DEBUG) != VA(0x00181AD2)) {
+        snprintf(msg, n, "This is another build of SSX 3 than this program was made for (" SSX3_BUILD_NAME
+                 "). Build it from source for your copy: docs/PORTS.md.");
+        return 0;
+    }
+    snprintf(msg, n, "Found %s (" SSX3_BUILD_NAME "). Ready to play.", name);
     return 1;
 }
 
