@@ -187,7 +187,7 @@ cmd.exe /c 'C:\Code\Xbox\ssx3-recomp\tools\build.bat'
 **Linux** (x86-64, or arm64 on Asahi). You need GCC or Clang, CMake,
 Ninja, SDL2, SDL2_ttf, fontconfig, the Vulkan headers, glslc, git and
 Python 3.9+ (Arch: `sdl2 sdl2_ttf fontconfig vulkan-headers shaderc cmake
-ninja`).
+ninja`; Fedora: see [docs/LINUX.md](docs/LINUX.md)).
 
 ```bash
 git clone https://github.com/koenhendriks/SSX3-recomp.git ssx3-recomp && cd ssx3-recomp
