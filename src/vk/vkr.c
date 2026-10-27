@@ -68,6 +68,7 @@ typedef struct {
     VkDeviceMemory rbh_mem;
     uint8_t *rbh_map;
     int rbh_noncoherent;
+    uint32_t rbh_w, rbh_h;          /* its size, taken at submit */
     int busy;                       /* submitted, read-back not released yet */
     /* RECOMP_VKR_GPUPROF: a timestamp after every draw of the frame */
     VkQueryPool qp;
@@ -2631,6 +2632,10 @@ int vkr_flip_submit(VkrContext *c)
     int slot = c->cur;
     VkImage frame;                       /* the finished, single-sample image */
     vkr_offscreen_done(c);               /* the frame is the main target's */
+    /* The flip thread reads the slot later, when c->sw/sh may be a render-to-texture
+     * target's (a 512x512 shadow map): keep the frame's own size with it. */
+    c->fr[slot].rbh_w = c->sw;
+    c->fr[slot].rbh_h = c->sh;
     if (!begin_cmd(c)) return -1;
     frame = c->resolved ? c->resolved : c->color;
     if (c->squeeze_all > 0.5f) {
@@ -2758,7 +2763,7 @@ const uint8_t *vkr_frame_pixels_full(VkrContext *c, int slot, uint32_t *w, uint3
         mr.memory = c->fr[slot].rbh_mem; mr.offset = 0; mr.size = VK_WHOLE_SIZE;
         vkInvalidateMappedMemoryRanges(c->dev, 1, &mr);
     }
-    *w = c->sw; *h = c->sh;
+    *w = c->fr[slot].rbh_w; *h = c->fr[slot].rbh_h;
     return c->fr[slot].rbh_map;
 }
 
