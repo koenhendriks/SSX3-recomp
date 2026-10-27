@@ -184,7 +184,8 @@ scripts/sync-windows.sh --game   # copy to C:\Code\Xbox for the MSVC build
 cmd.exe /c 'C:\Code\Xbox\ssx3-recomp\tools\build.bat'
 ```
 
-**Linux** (x86-64, or arm64 on Asahi). You need GCC or Clang, CMake,
+**Linux** (x86-64, or arm64 on Asahi). `scripts/linux-setup.sh <your rip folder or .iso>` does the
+steps below in one go and says which packages are missing. By hand: you need GCC or Clang, CMake,
 Ninja, SDL2, SDL2_ttf, fontconfig, the Vulkan headers, glslc, git and
 Python 3.9+ (Arch: `sdl2 sdl2_ttf fontconfig vulkan-headers shaderc cmake
 ninja`).

@@ -1,5 +1,14 @@
 # Linux build
 
+One command does all of it, from your rip folder or disc image (it checks the
+dependencies and says what to install):
+
+```bash
+scripts/linux-setup.sh ~/SSX3        # or: scripts/linux-setup.sh ssx3.iso
+```
+
+By hand:
+
 ```bash
 scripts/setup.sh && scripts/regen.sh      # as on Windows (XBE in disk/SSX3 or ../SSX3)
 ln -s disk/SSX3 game                      # exe opens game/default.xbe from the cwd
