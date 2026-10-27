@@ -229,6 +229,13 @@ else()
     endif()
 endif()
 
+# ctest: the texture dump skips surfaces redrawn every frame (tests/hdtex_dump_test.c).
+if(UNIX AND SSX3_VULKAN)
+    enable_testing()
+    add_executable(hdtex_dump_test tests/hdtex_dump_test.c src/vk/vkr_hdtex.c)
+    add_test(NAME hdtex_dump_test COMMAND hdtex_dump_test)
+endif()
+
 # ── Game-specific additions ─────────────────────────────────────
 #
 # Add any game-specific libraries, loaders, or custom renderers below.
