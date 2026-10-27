@@ -85,6 +85,13 @@ static const Choice k_shadows[] = {
     {"High (512x512)", "4"},
     {"Ultra (1024x1024)", "8"},
 };
+static const Choice k_pct[] = {
+    {"Off (0 %)", "0"},
+    {"25 %", "25"},
+    {"50 %", "50"},
+    {"75 %", "75"},
+    {"100 %", "100"},
+};
 static const Choice k_msaa[] = {
     {"Off", "0"},
     {"2x MSAA", "2"},
@@ -180,6 +187,7 @@ static void ini_save(void)
 static char s_path[PATH_MAX];
 static int s_res, s_aspect, s_msaa, s_aniso, s_drawdist, s_shadows;
 static int s_crt, s_hdtex, s_hudedges, s_skipintro, s_fastboot, s_debugmenu, s_moneycheat;
+static int s_ink, s_ink_color = 4, s_ink_sharpen = 4, s_ink_lines = 4;   /* Ink & Color; k_pct indices */
 static int s_loglevel = 2;
 static int s_game_ok;
 static char s_status[512];
@@ -303,6 +311,10 @@ static void load_settings(void)
     s_fastboot = ini_int("fast_boot", 1);
     s_debugmenu = ini_int("debug_menu", 0);
     s_moneycheat = ini_int("money_cheat", 0);
+    s_ink = ini_int("ink", 0);
+    s_ink_color = ini_int("ink_color", 4);
+    s_ink_sharpen = ini_int("ink_sharpen", 4);
+    s_ink_lines = ini_int("ink_lines", 4);
     s_loglevel = ini_int("log_level", 2);
     update_status();
 }
@@ -323,6 +335,10 @@ static void save_settings(void)
     ini_set_int("fast_boot", s_fastboot);
     ini_set_int("debug_menu", s_debugmenu);
     ini_set_int("money_cheat", s_moneycheat);
+    ini_set_int("ink", s_ink);
+    ini_set_int("ink_color", s_ink_color);
+    ini_set_int("ink_sharpen", s_ink_sharpen);
+    ini_set_int("ink_lines", s_ink_lines);
     ini_set_int("log_level", s_loglevel);
     ini_save();
 }
@@ -558,6 +574,10 @@ static void play(void)
     env_set("RECOMP_CRT", s_crt ? "1" : NULL);
     env_set("RECOMP_HDTEX", s_hdtex ? NULL : "0");
     env_set("RECOMP_HUD_EDGES", s_hudedges ? NULL : "0");
+    env_set("RECOMP_INK", s_ink ? "1" : NULL);
+    env_set("RECOMP_INK_COLOR", s_ink ? pick(k_pct, N(k_pct), s_ink_color) : NULL);
+    env_set("RECOMP_INK_SHARPEN", s_ink ? pick(k_pct, N(k_pct), s_ink_sharpen) : NULL);
+    env_set("RECOMP_INK_LINES", s_ink ? pick(k_pct, N(k_pct), s_ink_lines) : NULL);
     env_set("RECOMP_SKIP_INTRO", s_skipintro ? "1" : "0");
     env_set("RECOMP_FAST_BOOT", s_fastboot ? NULL : "0");
     env_set("RECOMP_DEBUG_MENU", s_debugmenu ? "1" : NULL);
@@ -735,7 +755,8 @@ static void check_mark(int x, int y, int size, SDL_Color c)
 /* ---- widgets: immediate mode --------------------------------------------- */
 
 enum {
-    W_NONE, W_PATH, W_RES, W_ASPECT, W_MSAA, W_ANISO, W_DRAWDIST, W_SHADOWS, W_LOGLEVEL
+    W_NONE, W_PATH, W_RES, W_ASPECT, W_MSAA, W_ANISO, W_DRAWDIST, W_SHADOWS, W_LOGLEVEL,
+    W_INK_COLOR, W_INK_SHARPEN, W_INK_LINES
 };
 
 static int s_mx = -1, s_my = -1, s_click;       /* logical mouse, one click per frame */
@@ -924,7 +945,21 @@ static int draw_form(int *want_play)
     checkbox(L, y, 440, "HD textures (Bl4ckH4nd's HD texture pack)", &s_hdtex);
     y += 24;
     checkbox(L, y, 440, "HUD at the screen edges (widescreen)", &s_hudedges);
-    y += 34;
+    y += 24;
+    checkbox(L, y, 520, "Ink & Color: richer colours and black ink outlines (3D world only)", &s_ink);
+    y += 28;
+    if (s_ink) {
+        row_label("Color", L + 24, y, RH);
+        combo(W_INK_COLOR, CX, y, CW, RH, k_pct, N(k_pct), &s_ink_color);
+        y += RH + 6;
+        row_label("Sharpen", L + 24, y, RH);
+        combo(W_INK_SHARPEN, CX, y, CW, RH, k_pct, N(k_pct), &s_ink_sharpen);
+        y += RH + 6;
+        row_label("Ink lines", L + 24, y, RH);
+        combo(W_INK_LINES, CX, y, CW, RH, k_pct, N(k_pct), &s_ink_lines);
+        y += RH + 6;
+    }
+    y += 6;
 
     heading("Game", L, y);
     y += 26;

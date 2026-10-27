@@ -223,6 +223,11 @@ static void settings_lines(void)
         env_on("RECOMP_MBLUR", 0) ? env_or("RECOMP_MBLUR", "") : "off",
         env_on("RECOMP_CAM", 0) ? "on" : "off", env_on("RECOMP_SKIP_INTRO", 1) ? "on" : "off",
         env_on("RECOMP_FAST_BOOT", 1) ? "on" : "off");
+    if (env_on("RECOMP_INK", 0))
+        ADD(" Ink & Color on (colour %s %%, sharpen %s %%, lines %s %%),", env_or("RECOMP_INK_COLOR", "100"),
+            env_or("RECOMP_INK_SHARPEN", "100"), env_or("RECOMP_INK_LINES", "100"));
+    else
+        ADD(" Ink & Color off,");
     ADD(" debug menu %s, money key %s, log level %s",
         env_on("RECOMP_DEBUG_MENU", 0) ? "on" : "off", env_on("RECOMP_MONEY_CHEAT", 0) ? "on" : "off",
         log_level_name(log_level()));

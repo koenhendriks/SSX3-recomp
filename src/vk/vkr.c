@@ -232,6 +232,7 @@ struct VkrContext {
      * (vkr_scene_set). sc_in: a copy of the frame for it to read. */
     int scene;
     float sc_p[9];                  /* mblur | near mindist edge cap speed s0 s1 reach */
+    float ink_p[4];                 /* Ink & Color: colour, sharpen, lines (0..1), on */
     VkrScene cam;
     int cam_valid;
     VkDescriptorSetLayout sc_dsl;
@@ -638,7 +639,19 @@ static void scene_config(VkrContext *c)
                     c->sc_p[1 + i] = (float)atof(eq + 1);
         }
     }
-    c->scene = c->sc_p[0] > 0.0f;
+    /* RECOMP_INK=1: the Ink & Color look (specs: ssx3-mods.md), with
+     * RECOMP_INK_COLOR / _SHARPEN / _LINES at 0..100 (each 100 when unset). */
+    {
+        static const char *const ink_env[3] = {"RECOMP_INK_COLOR", "RECOMP_INK_SHARPEN", "RECOMP_INK_LINES"};
+        e = getenv("RECOMP_INK");
+        c->ink_p[3] = e && *e && *e != '0' ? 1.0f : 0.0f;
+        for (i = 0; i < 3; i++) {
+            const char *v = getenv(ink_env[i]);
+            float x = v && *v ? (float)atof(v) / 100.0f : 1.0f;
+            c->ink_p[i] = x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+        }
+    }
+    c->scene = c->sc_p[0] > 0.0f || c->ink_p[3] > 0.0f;
 }
 
 /* scene.frag as a fullscreen triangle (crt.vert) into the colour target. */
@@ -703,6 +716,9 @@ static int make_scene(VkrContext *c)
     fprintf(stderr, "[VKR] scene pass on: mblur %.2f (near %.0f, mindist %.0f, edge %.2f, cap %.0f,"
             " speed %.3f from %.0f to %.0f, reach %.0f)\n", c->sc_p[0], c->sc_p[1], c->sc_p[2], c->sc_p[3],
             c->sc_p[4], c->sc_p[5], c->sc_p[6], c->sc_p[7], c->sc_p[8]);
+    if (c->ink_p[3] > 0.0f)
+        fprintf(stderr, "[VKR] Ink & Color on: colour %.0f%%, sharpen %.0f%%, lines %.0f%%\n",
+                c->ink_p[0] * 100.0f, c->ink_p[1] * 100.0f, c->ink_p[2] * 100.0f);
     return 1;
 }
 
@@ -2516,7 +2532,7 @@ static void scene_pass(VkrContext *c)
     VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO};
     VkViewport vp = {0, 0, (float)c->sw, (float)c->sh, 0.0f, 1.0f};
     VkRect2D sc = {{0, 0}, {c->sw, c->sh}};
-    float u[68];
+    float u[72];
     uint32_t off = (c->buf_used + 255) & ~255u, k;
     if (off + sizeof u > VKR_BUF_BYTES)
         return;
@@ -2539,6 +2555,7 @@ static void scene_pass(VkrContext *c)
         u[52 + 2 * k] = c->cam.rider_v[k][0];
         u[53 + 2 * k] = c->cam.rider_v[k][1];
     }
+    memcpy(u + 68, c->ink_p, sizeof c->ink_p);
     memcpy(c->buf_map + off, u, sizeof u);
     c->buf_used = off + (uint32_t)sizeof u;
 

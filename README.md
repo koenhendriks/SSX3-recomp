@@ -123,6 +123,10 @@ The launcher's choices are these environment variables:
 | `RECOMP_HDTEX` | `hd-textures` | the HD texture pack (Bl4ckH4nd's, see below) and its `ssx3_map.txt`; `0` = off |
 | `RECOMP_FPS30` | `0` | `1` = keep the game's own 30 FPS stretches (split screen, Metro-City's tunnel); by default they render at 60 |
 | `RECOMP_FPS_OVERLAY` | `0` | `1` = start with the FPS counter on (F3 toggles it): game FPS, frames shown, slowest frame; Windows |
+| `RECOMP_INK` | `0` | `1` = the Ink & Color look: richer colours and black ink outlines on the 3D world (the HUD and menus keep their look); in the Linux launcher, not yet the Windows one |
+| `RECOMP_INK_COLOR` | `100` | Ink & Color: how much richer the colours get, `0`..`100` |
+| `RECOMP_INK_SHARPEN` | `100` | Ink & Color: contrast-adaptive sharpening, `0`..`100` |
+| `RECOMP_INK_LINES` | `100` | Ink & Color: outline strength, `0`..`100` (far lines are lighter) |
 
 **Keyboard.** The game window must have focus. Remap the keys by copying
 `keys.example.ini` to `keys.ini` and editing it.

@@ -24,6 +24,7 @@ layout(set = 0, binding = 4, std140) uniform S {
     vec4 mb2;           /* motion blur: edge boost, longest blur (pixels at 1080 lines) */
     vec4 mb3;           /* speed blur: focus of expansion (guest pixels), strength now, reach */
     vec4 rider_v[4];    /* rider slot k's motion on screen (guest pixels): .xy even k, .zw odd */
+    vec4 ink;           /* Ink & Color: colour, sharpen, lines (0..1), on */
 } sc;
 
 ivec2 tsize() { return ivec2(sc.dims2.yz); }
