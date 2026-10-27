@@ -1443,6 +1443,16 @@ static int flush_wait(VkrContext *c)
     return 1;
 }
 
+/* Room for bytes more in the upload buffer, submitting what is recorded to
+ * empty it when not: a texture pack's large textures at a race start filled
+ * it, and the draws after them were dropped. */
+static int buf_room(VkrContext *c, size_t bytes)
+{
+    if (((c->buf_used + 255) & ~255u) + bytes <= VKR_BUF_BYTES)
+        return 1;
+    return bytes + 256 <= VKR_BUF_BYTES && flush_wait(c) && !c->buf_used;
+}
+
 void vkr_offscreen_done(VkrContext *c);
 
 int vkr_set_target(VkrContext *c, uint32_t w, uint32_t h, float zmax)
@@ -1919,9 +1929,10 @@ static void tex_index_add(VkrContext *c, VkrTex *t)
 int vkr_tex_update(VkrContext *c, VkrTex *t, uint64_t key, const uint32_t *pixels)
 {
     VkBufferImageCopy cp = {0};
-    uint32_t off = (c->buf_used + 15) & ~15u, bytes = t->w * t->h * 4;
-    if (off + bytes > VKR_BUF_BYTES || !begin_cmd(c))
+    uint32_t off, bytes = t->w * t->h * 4;
+    if (!buf_room(c, bytes) || !begin_cmd(c))
         return 0;
+    off = (c->buf_used + 15) & ~15u;
     end_pass(c);
     memcpy(c->buf_map + off, pixels, bytes);
     c->buf_used = off + bytes;
@@ -1967,10 +1978,11 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     VkBufferImageCopy cp = {0};
-    uint32_t off = (c->buf_used + 15) & ~15u, bytes = w * h * 4;
+    uint32_t off, bytes = w * h * 4;
     int m;
 
-    if (!t || !w || !h || off + bytes > VKR_BUF_BYTES) { free(t); return NULL; }
+    if (!t || !w || !h || !buf_room(c, bytes)) { free(t); return NULL; }
+    off = (c->buf_used + 15) & ~15u;
     if (c->tex_mips < 0) {
         const char *e = getenv("RECOMP_TEX_MIPS");
         c->tex_mips = !(e && *e == '0');
@@ -2079,12 +2091,13 @@ VkrTex *vkr_tex_create_bc7(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     VkBufferImageCopy cp[16];
-    uint32_t off = (c->buf_used + 15) & ~15u, l, lw, lh;
+    uint32_t off, l, lw, lh;
     size_t pos = 0;
     int m;
 
-    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || off + size > VKR_BUF_BYTES)
+    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || !buf_room(c, size))
         return NULL;
+    off = (c->buf_used + 15) & ~15u;
     for (l = 0, lw = w, lh = h; l < mips; l++) {       /* the levels fit in data */
         pos += (size_t)((lw + 3) / 4) * ((lh + 3) / 4) * 16;
         lw = lw > 1 ? lw / 2 : 1; lh = lh > 1 ? lh / 2 : 1;
@@ -2189,6 +2202,7 @@ int vkr_draw(VkrContext *c, const VkrVertex *v, uint32_t nverts,
         c->white = vkr_tex_create(c, 0x77686974ull, 1, 1, &white);
         if (!c->white) return 0;
     }
+    buf_room(c, (size_t)nverts * sizeof *v + (size_t)nidx * 4 + sizeof st->u + 512);
     if (!begin_cmd(c)) return 0;
     begin_pass(c);
     vb = (c->buf_used + 15) & ~15u;
@@ -2284,6 +2298,7 @@ int vkr_draw_vsh(VkrContext *c, const float *in, uint32_t nverts, uint32_t nin,
         c->white = vkr_tex_create(c, 0x77686974ull, 1, 1, &white);
         if (!c->white) return 0;
     }
+    buf_room(c, (size_t)in_bytes + (size_t)nidx * 4 + prog_bytes + sizeof c->vsh_consts + sizeof st->u + 512);
     if (!begin_cmd(c)) return 0;
     begin_pass(c);
     if (c->vsh_serial != c->upload_serial) {
@@ -2517,9 +2532,10 @@ static void scene_pass(VkrContext *c)
     VkViewport vp = {0, 0, (float)c->sw, (float)c->sh, 0.0f, 1.0f};
     VkRect2D sc = {{0, 0}, {c->sw, c->sh}};
     float u[68];
-    uint32_t off = (c->buf_used + 255) & ~255u, k;
-    if (off + sizeof u > VKR_BUF_BYTES)
+    uint32_t off, k;
+    if (!buf_room(c, sizeof u) || !begin_cmd(c))
         return;
+    off = (c->buf_used + 255) & ~255u;
     memcpy(u, c->cam.inv_m, 64);
     memcpy(u + 16, c->cam.prev_m, 64);
     u[32] = c->sc_p[0]; u[33] = c->sc_p[1]; u[34] = c->sc_p[2]; u[35] = c->tags ? 1.0f : 0.0f;
