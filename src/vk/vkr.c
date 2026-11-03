@@ -40,7 +40,15 @@ static double vkr_now_ms(void)
 #endif
 }
 
-#define VKR_BUF_BYTES (32u << 20)       /* vertex+index staging per frame */
+#define VKR_BUF_BYTES (64u << 20)       /* vertex+index staging per frame (32 MB overflowed on
+                                          * the first frame of a new area: 15.6 MB game
+                                          * textures + 7.3 MB HD + 9.9 MB draws, Snow Jam) */
+/* HD replacements (BC7, vkr_tex_create_bc7) may fill the frame's staging
+ * only up to this reserve: riding into a new area loads dozens at once,
+ * and the draws that no longer fit were dropped for that frame ("upload
+ * buffer full", a flicker of missing pieces). A replacement that does not
+ * fit waits for the next frame; the original texture shows until then. */
+#define VKR_DRAW_RESERVE (12u << 20)
 #define VKR_FRAMES 2                    /* frames in flight */
 #define VKR_SPEC_WORDS 39               /* xbox.frag SPEC + S0..S37 */
 #define VKR_PIPE_INDEX 8192
@@ -98,6 +106,8 @@ struct VkrContext {
     pthread_cond_t freed;
     uint32_t tex_gen;               /* bumped when every texture is freed */
     volatile int purge_req;         /* vkr_tex_purge: free them all at the next flip */
+    uint32_t up_tex, up_hd, up_draw;  /* this frame's staging bytes by kind (overflow report) */
+    int up_full_said;
     /* aliases of fr[cur] */
     VkCommandBuffer cmd;
     VkFence fence;
@@ -279,6 +289,17 @@ static void vk_failed(const char *call, VkResult r, const char *file, int line)
             (int)r, r == VK_ERROR_DEVICE_LOST ? ", device lost (GPU driver reset or crashed)"
                     : r == VK_ERROR_OUT_OF_DEVICE_MEMORY ? ", out of GPU memory"
                     : r == VK_ERROR_OUT_OF_HOST_MEMORY ? ", out of memory" : "", file, line);
+}
+
+/* "upload buffer full": what filled this frame's staging, once a frame */
+static void up_full(VkrContext *c, uint32_t want)
+{
+    if (c->up_full_said)
+        return;
+    c->up_full_said = 1;
+    log_msg(LOG_ERROR, "VKR", "upload buffer full: %u KB game textures, %u KB HD textures, %u KB draws this "
+            "frame; a request of %u KB did not fit", c->up_tex >> 10, c->up_hd >> 10, c->up_draw >> 10,
+            want >> 10);
 }
 
 #define CK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { \
@@ -1447,6 +1468,8 @@ static int flush_wait(VkrContext *c)
     CK(vkQueueSubmit(c->queue, 1, &si, c->fence));
     CK(vkWaitForFences(c->dev, 1, &c->fence, VK_TRUE, UINT64_MAX));
     c->buf_used = 0;
+    c->up_tex = c->up_hd = c->up_draw = 0;
+    c->up_full_said = 0;
     c->upload_serial++;
     return 1;
 }
@@ -1932,6 +1955,7 @@ int vkr_tex_update(VkrContext *c, VkrTex *t, uint64_t key, const uint32_t *pixel
         return 0;
     end_pass(c);
     memcpy(c->buf_map + off, pixels, bytes);
+    c->up_tex += off + bytes - c->buf_used;
     c->buf_used = off + bytes;
     barrier(c, t->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2010,6 +2034,7 @@ VkrTex *vkr_tex_create_ex(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     if (!begin_cmd(c)) return NULL;
     end_pass(c);                         /* copies are not allowed inside a pass */
     memcpy(c->buf_map + off, pixels, bytes);
+    c->up_tex += off + bytes - c->buf_used;
     c->buf_used = off + bytes;
     barrier_mips(c, t->img, 0, levels, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2091,7 +2116,7 @@ VkrTex *vkr_tex_create_bc7(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     size_t pos = 0;
     int m;
 
-    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || off + size > VKR_BUF_BYTES)
+    if (!vkr_has_bc7(c) || !w || !h || !mips || mips > 16 || off + size > VKR_BUF_BYTES - VKR_DRAW_RESERVE)
         return NULL;
     for (l = 0, lw = w, lh = h; l < mips; l++) {       /* the levels fit in data */
         pos += (size_t)((lw + 3) / 4) * ((lh + 3) / 4) * 16;
@@ -2122,6 +2147,7 @@ VkrTex *vkr_tex_create_bc7(VkrContext *c, uint64_t key, uint32_t w, uint32_t h,
     if (!begin_cmd(c)) { tex_free_one(c, t); return NULL; }
     end_pass(c);
     memcpy(c->buf_map + off, data, pos);
+    c->up_hd += off + (uint32_t)pos - c->buf_used;
     c->buf_used = off + (uint32_t)pos;
     memset(cp, 0, sizeof cp);
     for (l = 0, lw = w, lh = h, pos = 0; l < mips; l++) {
@@ -2204,13 +2230,14 @@ int vkr_draw(VkrContext *c, const VkrVertex *v, uint32_t nverts,
     ub = (ib + nidx * 4 + 255) & ~255u;
     end = ub + (uint32_t)sizeof st->u;
     if (end > VKR_BUF_BYTES) {
-        fprintf(stderr, "[VKR] upload buffer full\n");
+        up_full(c, end - c->buf_used);
         return 0;
     }
     off = vb;
     memcpy(c->buf_map + vb, v, nverts * sizeof *v);
     memcpy(c->buf_map + ib, idx, nidx * 4);
     memcpy(c->buf_map + ub, &st->u, sizeof st->u);
+    c->up_draw += end - c->buf_used;
     c->buf_used = end;
 
     vkCmdBindPipeline(c->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -2314,7 +2341,7 @@ int vkr_draw_vsh(VkrContext *c, const float *in, uint32_t nverts, uint32_t nin,
     ub = (ib + nidx * 4 + 255) & ~255u;
     end = ub + (uint32_t)sizeof st->u;
     if (end > VKR_BUF_BYTES) {
-        fprintf(stderr, "[VKR] upload buffer full\n");
+        up_full(c, end - c->buf_used);
         return 0;
     }
     if (co != c->vsh_const_off) {
@@ -2331,6 +2358,7 @@ int vkr_draw_vsh(VkrContext *c, const float *in, uint32_t nverts, uint32_t nin,
     memcpy(c->buf_map + vb, in, in_bytes);
     memcpy(c->buf_map + ib, idx, nidx * 4);
     memcpy(c->buf_map + ub, &st->u, sizeof st->u);
+    c->up_draw += end - c->buf_used;
     c->buf_used = end;
 
     vkCmdBindPipeline(c->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -2732,6 +2760,8 @@ int vkr_flip_submit(VkrContext *c)
     use_frame(c, (slot + 1) % VKR_FRAMES);
     c->fr[c->cur].qreset = 0;   /* its queries are reset when it is next begun */
     c->buf_used = 0;
+    c->up_tex = c->up_hd = c->up_draw = 0;
+    c->up_full_said = 0;
     c->upload_serial++;
     if (++c->flip_serial % 120 == 0)     /* every ~2 s: textures unused for 5 s */
         tex_evict_old(c, 300);
