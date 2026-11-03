@@ -8799,7 +8799,7 @@ new file mode 100644
 index 0000000..8871403
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,518 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -9077,6 +9077,8 @@ index 0000000..8871403
 +/* RECOMP_SNAP_TRIGGER=<file>: when it appears, dump the shown frame to the BMP
 + * path it contains and delete it. hi: the GPU backend's full-resolution frame
 + * when that is what the window shows (s_rgb is not updated then). */
++void xbox_FramebufferSnapshot(const char *path);
++
 +static void snap_trigger_poll(const uint32_t *hi, uint32_t hi_w, uint32_t hi_h)
 +{
 +    (void)hi; (void)hi_w; (void)hi_h;   /* the published frame (s_hi) is used */
@@ -9131,6 +9133,7 @@ index 0000000..8871403
 +    uint32_t *hi_rgb = NULL, hi_w = 0, hi_h = 0;
 +    double t0 = 0;
 +    int f0 = 0;
++    int fullscreen = 0;
 +
 +    (void)unused;
 +    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
@@ -9168,6 +9171,24 @@ index 0000000..8871403
 +                fflush(NULL);
 +                _exit(0);
 +            } else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
++                int toggle_fullscreen = e.type == SDL_KEYDOWN && !e.key.repeat &&
++                    (e.key.keysym.sym == SDLK_F11 ||
++                     ((e.key.keysym.mod & KMOD_ALT) &&
++                      (e.key.keysym.sym == SDLK_RETURN ||
++                       e.key.keysym.sym == SDLK_KP_ENTER)));
++                if (toggle_fullscreen) {
++                    fullscreen = !fullscreen;
++                    if (SDL_SetWindowFullscreen(win, fullscreen ?
++                            SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0) {
++                        fullscreen = !fullscreen;
++                        fprintf(stderr, "[FBWIN] fullscreen toggle failed: %s\n",
++                                SDL_GetError());
++                    } else {
++                        fprintf(stderr, "[FBWIN] fullscreen %s\n",
++                                fullscreen ? "on" : "off");
++                    }
++                    continue;
++                }
 +                int vk = sdl_to_vk(e.key.keysym.sym);
 +                /* RECOMP_KEY_TRACE: each key as it arrives, as in fb_present.c,
 +                 * with SDL's name for it -- tells "never reached the window"
