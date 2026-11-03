@@ -2761,3 +2761,65 @@ void sub_001BDAE0(void)
     }
     sub_001BDAE0_gen();
 }
+
+/*
+ * Draw queue safeguard. The renderer ([0x369528], vtable 0x2F7E50) queues
+ * draw entries during the update and runs them at the flush
+ * (sub_001F3020 -> sub_001F26A0 -> sub_001EE540, one sub_001EE440 per
+ * entry): an entry is 36 bytes, +0 the object to draw (its vtable's first
+ * method draws it), +4 its render state, +0x20 the index of the next entry
+ * in the same chain (0xFFFF = end), entries at [renderer+0x81B0].
+ * User's crash (2026-11-03, The Throne, 20 min in, crossing from Peak 2 to
+ * Peak 1 at draw distance 2x): an entry's object had a null first method and
+ * then a garbage vtable (0xC3B4F988) -- an object freed or overwritten
+ * between queueing and the flush, most likely while the world streamed one
+ * peak out. Every object in the chain is checked first (in guest RAM, vtable
+ * in .rdata, first method in code); a bad chain is skipped for this frame
+ * and logged ([DRAWQ]) instead of crashing.
+ */
+static int drawq_va_ok(uint32_t va)
+{
+    return (va >= 0x00010000u && va < 0x03FFFFF0u) || (va >= 0x80000000u && va < 0x83FFFFF0u);
+}
+
+static int drawq_entry_ok(uint32_t ren, uint32_t e, uint32_t *bad_obj, uint32_t *bad_vt)
+{
+    int k;
+    for (k = 0; k < 4096; k++) {
+        uint32_t obj, vt, m, next;
+        if (!drawq_va_ok(e))
+            return 0;
+        obj = MEM32(e);
+        vt = drawq_va_ok(obj) ? MEM32(obj) : 0;
+        m = vt >= 0x00281C40u && vt < 0x002FB500u ? MEM32(vt) : 0;
+        if (!drawq_va_ok(obj) || !(vt >= 0x00281C40u && vt < 0x002FB500u)
+            || !(m >= 0x00011000u && m < 0x00281C40u)) {
+            *bad_obj = obj;
+            *bad_vt = vt;
+            return 0;
+        }
+        next = MEM16(e + 0x20);
+        if (next == 0xFFFFu)
+            return 1;
+        if (!drawq_va_ok(ren + 0x81B0u))
+            return 0;
+        e = MEM32(ren + 0x81B0u) + next * 36u;
+    }
+    return 0;
+}
+
+extern void sub_001EE440_gen(void);
+
+void sub_001EE440(void)
+{
+    static unsigned skipped;
+    uint32_t ren = g_ecx, e = MEM32(g_esp + 4), bad_obj = 0, bad_vt = 0;
+    if (!drawq_entry_ok(ren, e, &bad_obj, &bad_vt)) {
+        if (++skipped <= 5 || skipped % 100 == 0)
+            log_msg(LOG_WARN, "DRAWQ", "draw entry %08X skipped: object %08X vtable %08X not valid "
+                    "(%u so far; was a crash, see ssx3_overrides.c)", e, bad_obj, bad_vt, skipped);
+        g_esp += 8;                      /* stdcall: return address + the entry */
+        return;
+    }
+    sub_001EE440_gen();
+}
