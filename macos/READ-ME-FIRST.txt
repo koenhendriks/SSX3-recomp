@@ -1,0 +1,13 @@
+SSX 3 recomp for macOS (Apple silicon, macOS 14 or newer)
+
+1. Drag SSX3.app onto Applications.
+2. The app is not notarised by Apple. The first time: right-click (Control-click)
+   SSX3.app > Open > Open. On macOS 15 and newer, if it is refused:
+   System Settings > Privacy & Security > Open Anyway.
+   Or in Terminal:  xattr -dr com.apple.quarantine /Applications/SSX3.app
+3. In the launcher press Browse and pick your own SSX 3 (PAL) rip: the folder with
+   default.xbe and data/. No game files are included. Then press Play.
+
+Keyboard = player 1. Xbox One / Series and other controllers work over Bluetooth or USB.
+F12 marks a problem in the log (with a screenshot).
+Source and build instructions: docs/MACOS.md in the repository (GPL-2.0).

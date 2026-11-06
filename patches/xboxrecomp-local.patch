@@ -1508,7 +1508,7 @@ index a91edbe..ae120d6 100644
  }
  
 diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
-index a045752..d2df24b 100644
+index a045752..e8d4932 100644
 --- a/src/kernel/CMakeLists.txt
 +++ b/src/kernel/CMakeLists.txt
 @@ -21,6 +21,7 @@ set(KERNEL_SOURCES
@@ -1523,7 +1523,7 @@ index a045752..d2df24b 100644
      # platform is an INTERFACE target on Windows: it contributes the src/
      # include path that "platform/xbox_winnt.h" resolves against.
      target_link_libraries(xbox_kernel PUBLIC platform kernel32 bcrypt)
-+elseif(EMSCRIPTEN)
++elseif(EMSCRIPTEN OR APPLE)
 +    # kernel_crypto.c is self-contained; nothing calls into OpenSSL.
 +    target_link_libraries(xbox_kernel PUBLIC platform)
  else()
@@ -7476,7 +7476,7 @@ index 93288d5..77c6520 100644
      struct sysinfo si;
      if (sysinfo(&si) != 0) return FALSE;
 diff --git a/src/platform/win32_compat.h b/src/platform/win32_compat.h
-index 22762ee..4c1a32c 100644
+index 22762ee..47b6286 100644
 --- a/src/platform/win32_compat.h
 +++ b/src/platform/win32_compat.h
 @@ -168,6 +168,7 @@ DWORD  GetCurrentProcessId(void);
@@ -7500,10 +7500,23 @@ index 22762ee..4c1a32c 100644
   * Note: GCC needs correct struct. This is from nxdk
   * */
 -#ifdef __linux__
-+#if defined(__linux__) || defined(__EMSCRIPTEN__)
++#if defined(__linux__) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
  typedef struct _EXCEPTION_POINTERS
  {
      PEXCEPTION_RECORD ExceptionRecord;
+diff --git a/src/platform/xbox_winnt.h b/src/platform/xbox_winnt.h
+index d4c2fc2..1defdce 100644
+--- a/src/platform/xbox_winnt.h
++++ b/src/platform/xbox_winnt.h
+@@ -156,7 +156,7 @@ typedef void              *HWND, *HDC, *HBITMAP, *HICON, *HMENU, *HCURSOR;
+ /* PCONTEXT: Windows VEH register state. On Linux the equivalent is
+  * ucontext_t*; we leave it opaque here since Linux callers don't use it. */
+  
+-#ifdef __linux__
++#if defined(__linux__) || defined(__APPLE__)
+ /* On gcc these data structures are necessary  even if anyone is going to be used*/
+ typedef union Register{
+ 	uint32_t X; // all register
 diff --git a/src/usb/ohci.c b/src/usb/ohci.c
 index 641a94d..63bec1f 100644
 --- a/src/usb/ohci.c
@@ -8796,10 +8809,10 @@ index 08bae4b..b52ae02 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..8871403
+index 0000000..394e352
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,537 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -8818,6 +8831,8 @@ index 0000000..8871403
 +#include <time.h>
 +void xbox_FramebufferApplyGamma(uint32_t *px, size_t n);   /* fb_gamma.c */
 +#include <unistd.h>
++
++void xbox_FramebufferSnapshot(const char *path);
 +
 +extern ptrdiff_t xbox_GetMemoryOffset(void);
 +
@@ -9277,18 +9292,56 @@ index 0000000..8871403
 +    return NULL;
 +}
 +
++#if defined(__APPLE__)
++/* macOS: Cocoa windows and events belong to the process's main thread (SDL
++ * otherwise blocks dispatching to it). The game runs on another thread
++ * (main.c) and the main thread runs the window loop here once asked. */
++static pthread_mutex_t s_main_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t  s_main_cond = PTHREAD_COND_INITIALIZER;
++static int s_main_want, s_main_quit;
++
++void xbox_FramebufferMainThreadRun(void)
++{
++    int want;
++
++    pthread_mutex_lock(&s_main_lock);
++    while (!s_main_want && !s_main_quit)
++        pthread_cond_wait(&s_main_cond, &s_main_lock);
++    want = s_main_want;
++    pthread_mutex_unlock(&s_main_lock);
++    if (want)
++        fb_thread(NULL);
++}
++
++void xbox_FramebufferMainThreadQuit(void)
++{
++    pthread_mutex_lock(&s_main_lock);
++    s_main_quit = 1;
++    pthread_cond_broadcast(&s_main_cond);
++    pthread_mutex_unlock(&s_main_lock);
++}
++#endif
++
 +void xbox_FramebufferWindowStart(void)
 +{
-+    pthread_t th;
-+
 +    if (!getenv("RECOMP_FB_WINDOW"))
 +        return;
 +    if (__sync_val_compare_and_swap(&s_fb_running, 0, 1) != 0)
 +        return;
-+    if (pthread_create(&th, NULL, fb_thread, NULL) == 0)
-+        pthread_detach(th);
-+    else
-+        s_fb_running = 0;
++#if defined(__APPLE__)
++    pthread_mutex_lock(&s_main_lock);
++    s_main_want = 1;
++    pthread_cond_broadcast(&s_main_cond);
++    pthread_mutex_unlock(&s_main_lock);
++#else
++    {
++        pthread_t th;
++        if (pthread_create(&th, NULL, fb_thread, NULL) == 0)
++            pthread_detach(th);
++        else
++            s_fb_running = 0;
++    }
++#endif
 +}
 +#endif /* !_WIN32 */
 +

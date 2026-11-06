@@ -1150,6 +1150,21 @@ VkrContext *vkr_create(void)
     f14.pushDescriptor = VK_TRUE;
     f13.pNext = &f14;
     di.pNext = &f13; di.queueCreateInfoCount = 1; di.pQueueCreateInfos = &qi;
+    {
+        /* MoltenVK (macOS) is a portability implementation: the spec requires
+         * VK_KHR_portability_subset to be enabled when the device lists it. */
+        static const char *ext_port = "VK_KHR_portability_subset";
+        VkExtensionProperties ep[256];
+        uint32_t ne = 256, k;
+        if (vkEnumerateDeviceExtensionProperties(c->phys, NULL, &ne, ep) >= 0)
+            for (k = 0; k < ne; k++)
+                if (!strcmp(ep[k].extensionName, ext_port)) {
+                    di.enabledExtensionCount = 1;
+                    di.ppEnabledExtensionNames = &ext_port;
+                    fprintf(stderr, "[VKR] portability subset enabled\n");
+                    break;
+                }
+    }
     if (vkCreateDevice(c->phys, &di, NULL, &c->dev) != VK_SUCCESS) goto fail;
     vkGetDeviceQueue(c->dev, c->qfam, 0, &c->queue);
     pci.queueFamilyIndex = c->qfam;

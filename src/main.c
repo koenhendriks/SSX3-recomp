@@ -600,10 +600,12 @@ static void install_crash_handler(void) {}
 #else /* !_WIN32 */
 
 #include <signal.h>
-#include <ucontext.h>
+#include "uc_regs.h"
 #include <execinfo.h>
 #include <unistd.h>
+#if defined(__linux__)
 #include <sys/prctl.h>
+#endif
 #include <sys/mman.h>
 
 #include "mmio_posix.h"
@@ -699,19 +701,21 @@ static void segv_handler(int sig, siginfo_t *si, void *uc_)
     void *bt[32];
     uintptr_t fault = (uintptr_t)si->si_addr;
     int n;
-#if defined(__aarch64__)
-    uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
+    uintptr_t pc = (uintptr_t)UC_PC(uc);
+#if defined(__APPLE__)
+    /* Darwin reports an access to a protected page as SIGBUS. */
+    int is_fault = (sig == SIGSEGV || sig == SIGBUS);
 #else
-    uintptr_t pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    int is_fault = (sig == SIGSEGV);
 #endif
 
     uint32_t insn = 0;
 
-    if (sig == SIGSEGV && ac97_len && g_xbox_mem_offset
+    if (is_fault && ac97_len && g_xbox_mem_offset
             && mmio_va(fault) >= AC97_BASE && mmio_va(fault) < AC97_BASE + ac97_len
             && ac97_write(uc, fault, &insn))
         return;
-    if (sig == SIGSEGV && g_xbox_mem_offset && mmio_owned(mmio_va(fault))
+    if (is_fault && g_xbox_mem_offset && mmio_owned(mmio_va(fault))
             && mmio_posix_step(uc, fault, mmio_read, mmio_write, &insn))
         return;
 
@@ -978,6 +982,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         else
             fprintf(stderr, "[BOOT] hardware TSO on\n");
     }
+#elif defined(__APPLE__) && defined(__aarch64__)
+    /* macOS gives native processes no switch for the cores' TSO mode (only
+     * Rosetta uses it), so the guest's x86 ordering is not guaranteed. */
+    fprintf(stderr, "[BOOT] macOS arm64: no hardware TSO; expect ordering bugs\n");
 #endif
 
     printf("=== SSX 3 - Static Recompilation ===\n");
@@ -1311,6 +1319,19 @@ static void web_setup(void)
 }
 #endif
 
+#if defined(__APPLE__) && !defined(_WIN32)
+#include <pthread.h>
+static int s_apple_rc;
+static void *apple_game_thread(void *arg)
+{
+    extern void xbox_FramebufferMainThreadQuit(void);
+    (void)arg;
+    s_apple_rc = WinMain(NULL, NULL, NULL, 0);
+    xbox_FramebufferMainThreadQuit();
+    return NULL;
+}
+#endif
+
 /* Console entry point (for debugging -- lets you see printf output) */
 int main(int argc, char **argv)
 {
@@ -1321,6 +1342,24 @@ int main(int argc, char **argv)
 #endif
 #ifdef _WIN32
     return WinMain(GetModuleHandle(NULL), NULL, GetCommandLineA(), SW_SHOW);
+#elif defined(__APPLE__)
+    /* macOS: the window and its events must live on the main thread, so the
+     * game runs on its own thread (with a main-thread-sized stack and more:
+     * guest call chains are native call chains) and the main thread runs the
+     * window loop (fb_present_sdl.c) once the game asks for a window. */
+    {
+        extern void xbox_FramebufferMainThreadRun(void);
+        pthread_attr_t a;
+        pthread_t th;
+
+        pthread_attr_init(&a);
+        pthread_attr_setstacksize(&a, 256u << 20);
+        if (pthread_create(&th, &a, apple_game_thread, NULL) != 0)
+            return WinMain(NULL, NULL, NULL, 0);
+        xbox_FramebufferMainThreadRun();
+        pthread_join(th, NULL);
+        return s_apple_rc;
+    }
 #else
     return WinMain(NULL, NULL, NULL, 0);
 #endif

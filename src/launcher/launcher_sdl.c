@@ -26,7 +26,13 @@
 #endif
 #include <SDL.h>
 #include <SDL_ttf.h>
+#if defined(__APPLE__)
+/* macOS: system fonts by path, the folder picker through AppleScript,
+ * Finder to open the logs. */
+#include <mach-o/dyld.h>
+#else
 #include <fontconfig/fontconfig.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -399,6 +405,21 @@ static void browse(void)
     int rc;
 
     snprintf(start, sizeof start, "%s/", *s_path ? s_path : getenv("HOME") ? getenv("HOME") : "/");
+#if defined(__APPLE__)
+    {
+        char script[PATH_MAX + 256];
+        snprintf(script, sizeof script,
+                 "POSIX path of (choose folder with prompt \"Choose the SSX 3 game folder "
+                 "(with default.xbe and data)\" default location (POSIX file \"%s\"))", start);
+        char *osa[] = { "osascript", "-e", script, NULL };
+        rc = run_capture(osa, out, sizeof out);
+        {
+            size_t l = strlen(out);
+            while (l > 1 && out[l - 1] == '/')
+                out[--l] = 0;
+        }
+    }
+#else
     {
         char *zen[] = { "zenity", "--file-selection", "--directory",
                         "--title=Choose the SSX 3 game folder (with default.xbe and data)",
@@ -410,6 +431,7 @@ static void browse(void)
                        "--title", "Choose the SSX 3 game folder (with default.xbe and data)", NULL };
         rc = run_capture(kd, out, sizeof out);
     }
+#endif
     if (rc < 0) {
         snprintf(s_status, sizeof s_status,
                  "No folder dialog found (install zenity or kdialog). Type the path in the box above.");
@@ -654,7 +676,11 @@ static void open_logs(void)
         return;
     }
     {
+#if defined(__APPLE__)
+        char *argv[] = { "open", logs, NULL };
+#else
         char *argv[] = { "xdg-open", logs, NULL };
+#endif
         spawn_detached(argv);
     }
 }
@@ -989,6 +1015,20 @@ static int draw_form(int *want_play)
 
 /* ---- fonts --------------------------------------------------------------- */
 
+#if defined(__APPLE__)
+static TTF_Font *open_font(const char *pattern, int pt)
+{
+    /* Helvetica.ttc: face 0 regular, face 1 bold. Arial as a fallback. */
+    int bold = strstr(pattern, "bold") != NULL, size = (int)(pt * s_scale + 0.5f);
+    TTF_Font *f = TTF_OpenFontIndex("/System/Library/Fonts/Helvetica.ttc", size, bold ? 1 : 0);
+    if (!f)
+        f = TTF_OpenFont(bold ? "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+                              : "/System/Library/Fonts/Supplemental/Arial.ttf", size);
+    if (!f)
+        f = TTF_OpenFont("/System/Library/Fonts/Geneva.ttf", size);
+    return f;
+}
+#else
 static TTF_Font *open_font(const char *pattern, int pt)
 {
     FcPattern *p = FcNameParse((const FcChar8 *)pattern), *m;
@@ -1006,6 +1046,7 @@ static TTF_Font *open_font(const char *pattern, int pt)
     FcPatternDestroy(p);
     return f;
 }
+#endif
 
 static int make_fonts(void)
 {
@@ -1044,7 +1085,18 @@ int main(int argc, char **argv)
     int running = 1, height = 760;
     (void)argc;
 
+#if defined(__APPLE__)
+    {
+        char exe[PATH_MAX];
+        uint32_t sz = sizeof exe;
+        if (_NSGetExecutablePath(exe, &sz) != 0 || !realpath(exe, s_dir))
+            if (!realpath(argv[0], s_dir))
+                snprintf(s_dir, sizeof s_dir, ".");
+    }
+    if (0)
+#else
     if (!realpath("/proc/self/exe", s_dir) && !realpath(argv[0], s_dir))
+#endif
         snprintf(s_dir, sizeof s_dir, ".");
     if ((slash = strrchr(s_dir, '/')) != NULL)
         *slash = 0;
@@ -1059,7 +1111,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "launcher: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+#if defined(__APPLE__)
+    if (TTF_Init() != 0) {
+#else
     if (TTF_Init() != 0 || !FcInit()) {
+#endif
         fprintf(stderr, "launcher: font setup failed: %s\n", TTF_GetError());
         return 1;
     }

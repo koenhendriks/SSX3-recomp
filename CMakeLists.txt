@@ -58,6 +58,10 @@ add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 # time, so a newly generated file (an extra chunk, recomp_stubs_unresolved.c)
 # is silently left out of the build and shows up as unresolved externals.
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
+# Ghidra named one CRT function of the game `isatty`. As a global symbol it
+# would take the place of the host libc's isatty() for our own code (macOS
+# binds the executable's definition first), so the lifted copy is renamed.
+set_source_files_properties(${RECOMP_GEN_SOURCES} PROPERTIES COMPILE_DEFINITIONS "isatty=guest_isatty")
 
 # Core game sources
 set(GAME_SOURCES
@@ -221,6 +225,10 @@ else()
     find_package(SDL2 QUIET)
     find_package(SDL2_ttf QUIET)
     find_package(Fontconfig QUIET)
+    # macOS has no fontconfig: the launcher opens the system fonts by path.
+    if(APPLE AND NOT TARGET Fontconfig::Fontconfig)
+        add_library(Fontconfig::Fontconfig INTERFACE IMPORTED)
+    endif()
     if(TARGET SDL2::SDL2 AND TARGET SDL2_ttf::SDL2_ttf AND TARGET Fontconfig::Fontconfig)
         add_executable(ssx3_launcher src/launcher/launcher_sdl.c)
         set_target_properties(ssx3_launcher PROPERTIES OUTPUT_NAME launcher)
