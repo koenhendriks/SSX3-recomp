@@ -38,6 +38,14 @@
 >   directory handle resolve against it and directories delete with `rmdir`
 >   (overwriting or deleting a save failed: "Unable to save").
 >   `RECOMP_FILE_TRACE=1` logs every file call.
+> - **Engine fixes for macOS/Linux** (POSIX gaps the Windows build does not
+>   have): no int64 overflow in the QEMU clock helpers (the APU clock went
+>   wrong seconds after host boot), a working `PulseEvent`, 8 MB guest thread
+>   stacks (macOS defaulted to 512 KB), atomic `pread`/`pwrite` for offset I/O,
+>   the host time zone for XAPI (saves showed UTC), timed waits on the
+>   monotonic clock, non-consuming wait-all, the current-thread pseudo handle
+>   in Suspend/Resume/Terminate/GetExitCodeThread, QoS for the audio and tick
+>   threads on macOS, and no App Nap for SSX3.app.
 > - **Linux build fixes** (the original's `main` did not compile on Linux):
 >   `log.h` was only included on Windows in `src/game_state.c` and
 >   `src/ssx3_overrides.c`; `fb_present_sdl.c` used a function before

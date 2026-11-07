@@ -11,6 +11,9 @@
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- No App Nap: a covered or minimised window must not slow the game's
+       timers (the Windows build opts out of power throttling for the same reason). -->
+  <key>NSAppSleepDisabled</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 </dict>
 </plist>
