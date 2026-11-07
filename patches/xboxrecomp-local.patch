@@ -1681,8 +1681,22 @@ index 0000000..45b6a74
 +    return (void *)(uintptr_t)(guest_base + g_xbox_pagemap[guest_base >> 20]);
 +}
 +#endif
+diff --git a/src/kernel/kernel.h b/src/kernel/kernel.h
+index b9a02bc..0e600a8 100644
+--- a/src/kernel/kernel.h
++++ b/src/kernel/kernel.h
+@@ -672,9 +672,7 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+     PLARGE_INTEGER ByteOffset);
+ 
+ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle);
+-#ifdef _WIN32
+ void xbox_dir_context_drop(HANDLE FileHandle);
+-#endif
+ 
+ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes);
+ 
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index c65ba43..79cb9fb 100644
+index c65ba43..3d6fcec 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -1751,7 +1765,17 @@ index c65ba43..79cb9fb 100644
  
      /* HAL disk identity strings (ordinals 41/42). The exported symbol is an
       * XBOX_ANSI_STRING whose Buffer must be an Xbox VA the title can deref --
-@@ -744,7 +745,7 @@ static void bridge_MmAllocateSystemMemory(void)
+@@ -683,9 +684,7 @@ static void bridge_NtClose(void)
+     if (raw_handle && raw_handle != 0xDEAD0001u && raw_handle != 0xBEEF0010u) {
+         HANDLE h = bridge_take_handle(raw_handle);
+         if (h && h != INVALID_HANDLE_VALUE) {
+-#ifdef _WIN32
+             xbox_dir_context_drop(h);
+-#endif
+             CloseHandle(h);
+         }
+     }
+@@ -744,7 +743,7 @@ static void bridge_MmAllocateSystemMemory(void)
      }
      xbox_va = xbox_HeapAlloc(size, 4096);
      if (xbox_va)
@@ -1760,7 +1784,7 @@ index c65ba43..79cb9fb 100644
      else
          fprintf(stderr, "  [KERNEL] MmAllocateSystemMemory: %u bytes REFUSED\n",
                  size);
-@@ -788,7 +789,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
+@@ -788,7 +787,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
           * pool headers and free-list roots are assumed clear, so whatever the
           * backing view happened to contain shows up later as structures that
           * are "allocated" but full of garbage. */
@@ -1769,7 +1793,7 @@ index c65ba43..79cb9fb 100644
  
          if (KERNEL_LOG_ON_HALF()) {
              fprintf(stderr, "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u "
-@@ -1275,7 +1276,7 @@ static void bridge_ExQueryNonVolatileSetting(void)
+@@ -1275,7 +1274,7 @@ static void bridge_ExQueryNonVolatileSetting(void)
      NTSTATUS st = xbox_ExQueryNonVolatileSetting(
          value_index,
          type_va   ? (PULONG)&BRIDGE_MEM32(type_va)   : NULL,
@@ -1778,7 +1802,7 @@ index c65ba43..79cb9fb 100644
          value_length,
          result_va ? (PULONG)&BRIDGE_MEM32(result_va) : NULL);
  
-@@ -1514,6 +1515,31 @@ static HANDLE bridge_resolve_handle(uint32_t token);
+@@ -1514,6 +1513,31 @@ static HANDLE bridge_resolve_handle(uint32_t token);
  static HANDLE ke_guest_event(uint32_t guest_va, int *type);
  
  /* ── KeSetEvent (ordinal 145) ────────────────────────────── */
@@ -1810,7 +1834,7 @@ index c65ba43..79cb9fb 100644
  static void bridge_KeSetEvent(void)
  {
      uint32_t guest_va = STACK_ARG(0);
-@@ -1528,12 +1554,14 @@ static void bridge_KeSetEvent(void)
+@@ -1528,12 +1552,14 @@ static void bridge_KeSetEvent(void)
          int type;
          HANDLE ge = ke_guest_event(guest_va, &type);
          if (ge) {
@@ -1825,7 +1849,7 @@ index c65ba43..79cb9fb 100644
      h = ke_shadow_lookup(guest_va);
      if (!h)
          h = bridge_resolve_handle(guest_va);
-@@ -1545,6 +1573,21 @@ static void bridge_KeSetEvent(void)
+@@ -1545,6 +1571,21 @@ static void bridge_KeSetEvent(void)
          g_eax = 0;
  }
  
@@ -1847,7 +1871,7 @@ index c65ba43..79cb9fb 100644
  /* ── KeWaitForSingleObject (ordinal 159) ─────────────────── */
  static void bridge_KeWaitForSingleObject(void)
  {
-@@ -1560,6 +1603,7 @@ static void bridge_KeWaitForSingleObject(void)
+@@ -1560,6 +1601,7 @@ static void bridge_KeWaitForSingleObject(void)
           * writing 0 there -- so bring the host event in line first. */
          int type;
          HANDLE ge = ke_guest_event(object, &type);
@@ -1855,7 +1879,7 @@ index c65ba43..79cb9fb 100644
          if (ge) {
              if (BRIDGE_MEM32(object + 4) == 0) {
                  ResetEvent(ge);
-@@ -2028,6 +2072,21 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
+@@ -2028,6 +2070,21 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
      BRIDGE_MEM32(dpc_va + 20) = arg1;
      BRIDGE_MEM32(dpc_va + 24) = arg2;
  
@@ -1877,7 +1901,7 @@ index c65ba43..79cb9fb 100644
      g_esp -= 4; BRIDGE_MEM32(g_esp) = arg2;
      g_esp -= 4; BRIDGE_MEM32(g_esp) = arg1;
      g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
-@@ -2251,26 +2310,56 @@ static int kernel_raise_interrupt(uint32_t vector)
+@@ -2251,26 +2308,56 @@ static int kernel_raise_interrupt(uint32_t vector)
  #define NV2A_PCRTC_INTR_VBLANK (1u << 0)
  #define NV2A_VECTOR            3u
  
@@ -1941,7 +1965,7 @@ index c65ba43..79cb9fb 100644
      BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PMC_INTR_0)   |= NV2A_PMC_INTR_PCRTC;
  
      {
-@@ -2284,6 +2373,222 @@ static void kernel_vblank_tick(void)
+@@ -2284,6 +2371,222 @@ static void kernel_vblank_tick(void)
      }
  }
  
@@ -2164,7 +2188,7 @@ index c65ba43..79cb9fb 100644
  /* Run whatever is queued. Called from the timer thread, which has the guest
   * stack and TIB that a deferred routine needs. */
  static void kernel_drain_dpcs(void)
-@@ -2532,15 +2837,37 @@ static void bridge_KeInitializeTimerEx(void)
+@@ -2532,15 +2835,37 @@ static void bridge_KeInitializeTimerEx(void)
  typedef struct {
      uint32_t timer_va;      /* the guest KTIMER, 0 for a free slot */
      uint32_t dpc_va;
@@ -2203,7 +2227,7 @@ index c65ba43..79cb9fb 100644
      int slot = xbox_worker_stack_alloc();
  
      (void)unused;
-@@ -2566,14 +2893,34 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2566,14 +2891,34 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          g_fs_base = tib;
      }
  
@@ -2241,7 +2265,7 @@ index c65ba43..79cb9fb 100644
  
          for (i = 0; i < XBOX_MAX_TIMERS; i++) {
              uint32_t dpc, fired_va;
-@@ -2585,20 +2932,53 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2585,20 +2930,53 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
              }
              fired_va = g_timers[i].timer_va;
              dpc = g_timers[i].dpc_va;
@@ -2299,7 +2323,7 @@ index c65ba43..79cb9fb 100644
                  if (ev) {
                      SetEvent(ev);
                      BRIDGE_MEM32(fired_va + 4) = 1;   /* SignalState */
-@@ -2612,7 +2992,9 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2612,7 +2990,9 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
  static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
                               long period_ms, uint32_t dpc_va)
  {
@@ -2310,7 +2334,7 @@ index c65ba43..79cb9fb 100644
      int i, free_slot = -1;
      uint32_t was_set = 0;
  
-@@ -2630,11 +3012,35 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
+@@ -2630,11 +3010,35 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
      if (free_slot >= 0) {
          g_timers[free_slot].timer_va  = timer_va;
          g_timers[free_slot].dpc_va    = dpc_va;
@@ -2347,7 +2371,7 @@ index c65ba43..79cb9fb 100644
      /* A freshly set timer starts unsignaled, like the real KeSetTimer. */
      {
          HANDLE ev = ke_shadow_lookup(timer_va);
-@@ -2966,6 +3372,7 @@ static NTSTATUS bridge_create_file_impl(
+@@ -2966,6 +3370,7 @@ static NTSTATUS bridge_create_file_impl(
          bridge_write_handle(handle_va, h);
          bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
      } else {
@@ -2355,7 +2379,7 @@ index c65ba43..79cb9fb 100644
          bridge_write_iostatus(iostatus_va, st, 0);
      }
      return st;
-@@ -3159,6 +3566,16 @@ static void bridge_NtOpenFile(void)
+@@ -3159,6 +3564,16 @@ static void bridge_NtOpenFile(void)
   */
  recomp_func_t recomp_lookup_kernel(uint32_t xbox_va);
  
@@ -2372,7 +2396,7 @@ index c65ba43..79cb9fb 100644
  static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
                              uint32_t iostatus)
  {
-@@ -3175,7 +3592,11 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
+@@ -3175,7 +3590,11 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
          g_esp -= 4; BRIDGE_MEM32(g_esp) = iostatus;
          g_esp -= 4; BRIDGE_MEM32(g_esp) = apc_context;
          g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;   /* dummy return address */
@@ -2385,7 +2409,7 @@ index c65ba43..79cb9fb 100644
          g_esp += 12;
      } else {
          uint32_t ord = 0;
-@@ -3399,6 +3820,20 @@ static int bridge_async_io_enabled(void)
+@@ -3399,6 +3818,20 @@ static int bridge_async_io_enabled(void)
      return on;
  }
  
@@ -2406,7 +2430,7 @@ index c65ba43..79cb9fb 100644
  /* ── NtReadFile (ordinal 219, 8 args = 32 bytes) ──────── */
  static void bridge_NtReadFile(void)
  {
-@@ -3436,7 +3871,9 @@ static void bridge_NtReadFile(void)
+@@ -3436,7 +3869,9 @@ static void bridge_NtReadFile(void)
           * whatever precedes the file it actually wants, and a read that stops
           * early looks identical to one that never started -- until you can
           * see where each one landed. */
@@ -2417,7 +2441,7 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [READ] from=0x%08X ev=%08X apc=%08X @%lld want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
                      g_xbox_kernel_caller, STACK_ARG(1), STACK_ARG(2),
                      (long long)off.QuadPart, length, got,
-@@ -4155,8 +4592,31 @@ static void bridge_KeQueryBasePriorityThread(void)
+@@ -4155,8 +4590,31 @@ static void bridge_KeQueryBasePriorityThread(void)
          XBOX_TO_NATIVE(STACK_ARG(0)));
  }
  
@@ -2449,7 +2473,7 @@ index c65ba43..79cb9fb 100644
      g_eax = (uint32_t)xbox_KeSetBasePriorityThread(
          XBOX_TO_NATIVE(STACK_ARG(0)), (LONG)STACK_ARG(1));
  }
-@@ -4472,15 +4932,49 @@ static void bridge_KeWaitForMultipleObjects(void)
+@@ -4472,15 +4930,49 @@ static void bridge_KeWaitForMultipleObjects(void)
      }
      if (count > BRIDGE_MAXIMUM_WAIT_OBJECTS)
          count = BRIDGE_MAXIMUM_WAIT_OBJECTS;
@@ -2502,7 +2526,7 @@ index c65ba43..79cb9fb 100644
  }
  
  #undef BRIDGE_MAXIMUM_WAIT_OBJECTS
-@@ -6792,7 +7286,7 @@ static void bridge_IoAllocateIrp(void)
+@@ -6792,7 +7284,7 @@ static void bridge_IoAllocateIrp(void)
      (void)charge_quota;
      va = xbox_HeapAlloc(total, 16);
      if (va)
@@ -2511,7 +2535,7 @@ index c65ba43..79cb9fb 100644
      else
          fprintf(stderr, "  [KERNEL] IoAllocateIrp: %u bytes REFUSED\n", total);
      g_eax = va;
-@@ -7349,8 +7843,7 @@ static void bridge_KeSetPriorityProcess(void)
+@@ -7349,8 +7841,7 @@ static void bridge_KeSetPriorityProcess(void)
  /* --- KeSetPriorityThread (ordinal 148, 2 args = 8 bytes) --- */
  static void bridge_KeSetPriorityThread(void)
  {
@@ -2521,7 +2545,7 @@ index c65ba43..79cb9fb 100644
      g_eax = 0;
  }
  
-@@ -7424,7 +7917,7 @@ static void bridge_MmDbgAllocateMemory(void)
+@@ -7424,7 +7915,7 @@ static void bridge_MmDbgAllocateMemory(void)
      }
      va = xbox_HeapAlloc(size, 16);
      if (va)
@@ -2530,7 +2554,7 @@ index c65ba43..79cb9fb 100644
      g_eax = va;
  }
  
-@@ -9371,14 +9864,218 @@ static int guest_cpu_enabled(void)
+@@ -9371,14 +9862,218 @@ static int guest_cpu_enabled(void)
      return g_guest_cpu_on;
  }
  
@@ -2749,7 +2773,7 @@ index c65ba43..79cb9fb 100644
      }
  }
  
-@@ -9391,11 +10088,160 @@ void guest_cpu_part(void)
+@@ -9391,11 +10086,160 @@ void guest_cpu_part(void)
      t_guest_thread = 0;
  }
  
@@ -2911,7 +2935,7 @@ index c65ba43..79cb9fb 100644
      if (held) {                        /* let other guest threads run meanwhile */
          t_guest_held = 0;
          LeaveCriticalSection(&g_guest_cpu);
-@@ -9403,11 +10249,16 @@ static void kernel_thunk_dispatch(void)
+@@ -9403,11 +10247,16 @@ static void kernel_thunk_dispatch(void)
      t_dispatch_depth++;
      kernel_thunk_dispatch_body();
      t_dispatch_depth--;
@@ -2929,7 +2953,7 @@ index c65ba43..79cb9fb 100644
          t_guest_held = 1;
      }
      (void)held;
-@@ -9447,9 +10298,9 @@ static void kernel_thunk_dispatch_body(void)
+@@ -9447,9 +10296,9 @@ static void kernel_thunk_dispatch_body(void)
  
      {
          static DWORD last_summary_tick = 0;
@@ -2941,7 +2965,7 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [KERNEL] summary: %lld total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
                      g_kernel_call_count, ordinal, slot, g_esp);
              /* And which ones, ranked. "Latest" names whatever the sample
-@@ -9671,7 +10522,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9671,7 +10520,7 @@ void xbox_kernel_bridge_init(void)
      /* The thunk table lives in .rdata which is marked PAGE_READONLY.
       * Temporarily make it writable so we can patch the ordinals. */
      VirtualProtect(
@@ -2950,7 +2974,7 @@ index c65ba43..79cb9fb 100644
          g_thunk_table_count * 4,
          PAGE_READWRITE,
          &old_protect
-@@ -9749,7 +10600,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9749,7 +10598,7 @@ void xbox_kernel_bridge_init(void)
          DWORD scan_protect;
          uint32_t low = g_thunk_table_base - LOOKBEHIND * 4;
  
@@ -2959,7 +2983,7 @@ index c65ba43..79cb9fb 100644
                         LOOKBEHIND * 4, PAGE_READWRITE, &scan_protect);
  
          for (i = 1; i <= LOOKBEHIND; i++) {
-@@ -9778,13 +10629,13 @@ void xbox_kernel_bridge_init(void)
+@@ -9778,13 +10627,13 @@ void xbox_kernel_bridge_init(void)
                      va, g_slot_ordinals[slot], slot);
          }
  
@@ -2976,7 +3000,7 @@ index c65ba43..79cb9fb 100644
          old_protect,
          &old_protect
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index 42135e0..73cfde7 100644
+index 42135e0..6eff2c1 100644
 --- a/src/kernel/kernel_file.c
 +++ b/src/kernel/kernel_file.c
 @@ -135,7 +135,7 @@ static BOOL translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
@@ -2988,7 +3012,69 @@ index 42135e0..73cfde7 100644
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
      PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess,
-@@ -805,7 +805,7 @@ static NTSTATUS errno_to_status(int e)
+@@ -748,6 +748,20 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+ /* ====================  POSIX backend  =================================== */
+ /* ======================================================================== */
+ 
++#include <stdlib.h>
++/* RECOMP_FILE_TRACE=1: every file call of the POSIX backend on stderr as
++ * [FTRACE] lines (path, disposition, sizes, results). Read once. */
++static int ftrace_on(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char *e = getenv("RECOMP_FILE_TRACE");
++        on = (e && *e && *e != '0') ? 1 : 0;
++    }
++    return on;
++}
++#define FTRACE(...) do { if (ftrace_on()) { fprintf(stderr, "  [FTRACE] " __VA_ARGS__); fputc('\n', stderr); } } while (0)
++
+ /* Convert Xbox access mask + disposition to POSIX open() flags. */
+ static int posix_open_flags(ACCESS_MASK access, ULONG disposition)
+ {
+@@ -792,6 +806,40 @@ static ULONG mode_to_xbox_attrs(mode_t m)
+     return a;
+ }
+ 
++#ifndef STATUS_DIRECTORY_NOT_EMPTY
++#define STATUS_DIRECTORY_NOT_EMPTY ((NTSTATUS)0xC0000101L)
++#endif
++
++/* The POSIX twin of translate_obj_path: a name relative to
++ * ObjectAttributes->RootDirectory (XDeleteSaveGame opens each child of a save
++ * this way) resolves against that directory handle's host path. */
++static BOOL posix_translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
++                                     char *host_path, size_t n, const char **xbox_path_out)
++{
++    const char *xbox_path = get_xbox_path(ObjectAttributes);
++    if (xbox_path_out)
++        *xbox_path_out = xbox_path;
++    if (!xbox_path)
++        return FALSE;
++    if (ObjectAttributes->RootDirectory && xbox_path[0] != '\\' &&
++        !(xbox_path[0] && xbox_path[1] == ':')) {
++        const char *root = w32_handle_path(ObjectAttributes->RootDirectory);
++        size_t l;
++        char *p;
++        if (!root)
++            return FALSE;
++        l = strlen(root);
++        if ((size_t)snprintf(host_path, n, "%s%s%s", root,
++                             (l && root[l - 1] == '/') ? "" : "/", xbox_path) >= n)
++            return FALSE;
++        for (p = host_path + l; *p; p++)
++            if (*p == '\\')
++                *p = '/';
++        return TRUE;
++    }
++    return xbox_translate_path(xbox_path, host_path, n);
++}
++
+ static NTSTATUS errno_to_status(int e)
+ {
+     switch (e) {
+@@ -805,7 +853,7 @@ static NTSTATUS errno_to_status(int e)
      }
  }
  
@@ -2997,7 +3083,16 @@ index 42135e0..73cfde7 100644
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
      PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess,
-@@ -824,7 +824,12 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -817,14 +865,19 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+     if (!FileHandle || !ObjectAttributes)
+         return STATUS_INVALID_PARAMETER;
+ 
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH)) {
++    const char* xbox_path = NULL;
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, MAX_PATH, &xbox_path)) {
+         xbox_log(XBOX_LOG_ERROR, XBOX_LOG_FILE, "NtCreateFile: path translation failed");
+         return STATUS_OBJECT_PATH_NOT_FOUND;
      }
  
      int fd;
@@ -3011,15 +3106,207 @@ index 42135e0..73cfde7 100644
          if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
              mkdir(host_path, 0755);   /* EEXIST is fine */
          fd = open(host_path, O_RDONLY | O_DIRECTORY);
-@@ -835,6 +840,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -834,7 +887,10 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+ 
      if (fd < 0) {
          int e = errno;
++        FTRACE("create '%s' -> '%s' disp=%u opts=0x%X access=0x%X: errno %d (%s)", xbox_path, host_path,
++               (unsigned)CreateDisposition, (unsigned)CreateOptions, (unsigned)DesiredAccess, e, strerror(e));
          XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile FAILED: %s (errno=%d)", host_path, e);
 +        fprintf(stderr, "  [FILE] host open '%s' failed: %s\n", host_path, strerror(e));
          if (IoStatusBlock) {
              IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
              IoStatusBlock->Information = 0;
-@@ -1340,3 +1346,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
+@@ -847,6 +903,9 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+         IoStatusBlock->Status = STATUS_SUCCESS;
+         IoStatusBlock->Information = (CreateDisposition == XBOX_FILE_CREATE) ? 2 : 1;
+     }
++    FTRACE("create '%s' -> '%s' disp=%u opts=0x%X access=0x%X: ok handle=%p info=%lu", xbox_path, host_path,
++           (unsigned)CreateDisposition, (unsigned)CreateOptions, (unsigned)DesiredAccess, *FileHandle,
++           IoStatusBlock ? (unsigned long)IoStatusBlock->Information : 0ul);
+     XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile: %s -> handle=%p", host_path, *FileHandle);
+     return STATUS_SUCCESS;
+ }
+@@ -870,6 +929,8 @@ NTSTATUS __stdcall xbox_NtReadFile(
+         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
+ 
+     ssize_t n = read(fd, Buffer, Length);
++    FTRACE("read %s off=%lld len=%u -> %zd", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
++           ByteOffset ? (long long)ByteOffset->QuadPart : -1LL, (unsigned)Length, n);
+     if (n < 0) {
+         XBOX_TRACE(XBOX_LOG_FILE, "NtReadFile(handle=%p) errno=%d", FileHandle, errno);
+         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
+@@ -906,6 +967,8 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
+ 
+     ssize_t n = write(fd, Buffer, Length);
++    FTRACE("write %s off=%lld len=%u -> %zd", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
++           ByteOffset ? (long long)ByteOffset->QuadPart : -1LL, (unsigned)Length, n);
+     if (n < 0) {
+         XBOX_TRACE(XBOX_LOG_FILE, "NtWriteFile(handle=%p) errno=%d", FileHandle, errno);
+         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
+@@ -923,6 +986,9 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ {
+     XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
+     if (Handle && Handle != INVALID_HANDLE_VALUE) {
++        /* Handle values are recycled at once: an enumeration left open on
++         * this one must not carry over to the next directory that gets it. */
++        xbox_dir_context_drop(Handle);
+         CloseHandle(Handle);
+         return STATUS_SUCCESS;
+     }
+@@ -932,10 +998,10 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
+ {
+     char host_path[MAX_PATH];
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, MAX_PATH, NULL))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     XBOX_TRACE(XBOX_LOG_FILE, "NtDeleteFile: %s", host_path);
++    FTRACE("delete %s", host_path);
+     if (unlink(host_path) == 0) return STATUS_SUCCESS;
+     if (rmdir(host_path)  == 0) return STATUS_SUCCESS;
+     return STATUS_OBJECT_NAME_NOT_FOUND;
+@@ -953,6 +1019,8 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+     if (fd < 0)
+         return STATUS_INVALID_HANDLE;
+ 
++    FTRACE("queryinfo %s class=%d", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
++           (int)FileInformationClass);
+     struct stat st;
+     if (FileInformationClass != XboxFilePositionInformation) {
+         if (fstat(fd, &st) != 0)
+@@ -1023,6 +1091,8 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+     if (fd < 0)
+         return STATUS_INVALID_HANDLE;
+ 
++    FTRACE("setinfo %s class=%d", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
++           (int)FileInformationClass);
+     switch (FileInformationClass) {
+         case XboxFilePositionInformation: {
+             PXBOX_FILE_POSITION_INFORMATION info = (PXBOX_FILE_POSITION_INFORMATION)FileInformation;
+@@ -1044,7 +1114,13 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+              * matches NT "delete on close" semantics exactly. */
+             if (info->DeleteFile) {
+                 const char* p = w32_handle_path(FileHandle);
+-                if (p) unlink(p);
++                /* A directory (XDeleteSaveGame removes the save's own folder
++                 * last) needs rmdir; unlink fails on it. */
++                if (p && unlink(p) != 0 && rmdir(p) != 0) {
++                    FTRACE("delete-on-close %s: %s", p, strerror(errno));
++                    return errno == ENOTEMPTY ? STATUS_DIRECTORY_NOT_EMPTY : errno_to_status(errno);
++                }
++                FTRACE("delete-on-close %s", p ? p : "?");
+             }
+             IoStatusBlock->Status = STATUS_SUCCESS;
+             return STATUS_SUCCESS;
+@@ -1073,6 +1149,8 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+     (void)Length;
+     if (!IoStatusBlock || !FsInformation)
+         return STATUS_INVALID_PARAMETER;
++    FTRACE("queryvolume %s class=%d", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
++           (int)FsInformationClass);
+ 
+     switch (FsInformationClass) {
+         case XboxFileFsSizeInformation: {
+@@ -1124,11 +1202,14 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+ 
+     if (!FileInformation)
+         return STATUS_INVALID_PARAMETER;
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
++    const char* xbox_path = NULL;
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, MAX_PATH, &xbox_path))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+-    if (stat(host_path, &st) != 0)
++    if (stat(host_path, &st) != 0) {
++        FTRACE("fullattrs '%s' -> '%s': not found", xbox_path, host_path);
+         return STATUS_OBJECT_NAME_NOT_FOUND;
++    }
++    FTRACE("fullattrs '%s' -> '%s': size %lld dir %d", xbox_path, host_path, (long long)st.st_size, S_ISDIR(st.st_mode));
+ 
+     unix_to_filetime(st.st_ctime, 0, &FileInformation->CreationTime);
+     unix_to_filetime(st.st_atime, 0, &FileInformation->LastAccessTime);
+@@ -1146,12 +1227,36 @@ typedef struct {
+     HANDLE handle;
+     DIR*   dir;
+     char   pattern[64];
++    char   path[MAX_PATH];   /* the directory this enumeration walks */
+ } DIR_CONTEXT;
+ 
+ static DIR_CONTEXT s_dir_contexts[MAX_DIR_CONTEXTS];
+ static CRITICAL_SECTION s_dir_cs;
+ static BOOL s_dir_cs_init = FALSE;
+ 
++/* NtClose: drop the enumeration state of a closed handle. Contexts are keyed
++ * by handle value and those are reused straight away, so a title that stops
++ * enumerating early (XFindFirstSaveGame after its first hit, a probe for
++ * "*.ssx") left a half-read DIR stream behind; the next directory opened with
++ * the same value then continued that stale stream and saw "no more files".
++ * SSX 3 reported its own save as "Unable to load PLAYER 1". The Windows
++ * backend has had the same fix (above); this is its POSIX counterpart. */
++void xbox_dir_context_drop(HANDLE h)
++{
++    if (!s_dir_cs_init || !h)
++        return;
++    EnterCriticalSection(&s_dir_cs);
++    for (int i = 0; i < MAX_DIR_CONTEXTS; i++)
++        if (s_dir_contexts[i].handle == h) {
++            if (s_dir_contexts[i].dir)
++                closedir(s_dir_contexts[i].dir);
++            s_dir_contexts[i].dir = NULL;
++            s_dir_contexts[i].handle = NULL;
++            s_dir_contexts[i].path[0] = '\0';
++        }
++    LeaveCriticalSection(&s_dir_cs);
++}
++
+ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,
+     PXBOX_IO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
+@@ -1180,6 +1285,16 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         if (!ctx) { LeaveCriticalSection(&s_dir_cs); return STATUS_INSUFFICIENT_RESOURCES; }
+         ctx->handle = FileHandle;
+         ctx->dir = NULL;
++        ctx->path[0] = '\0';
++    }
++    {
++        /* Belt and braces for a handle closed some other way: a context
++         * for a different directory than this handle's is stale. */
++        const char *hp = w32_handle_path(FileHandle);
++        if (ctx->dir && hp && strcmp(hp, ctx->path) != 0) {
++            closedir(ctx->dir);
++            ctx->dir = NULL;
++        }
+     }
+ 
+     if (RestartScan || ctx->dir == NULL) {
+@@ -1187,6 +1302,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         const char* dpath = w32_handle_path(FileHandle);
+         if (!dpath) { LeaveCriticalSection(&s_dir_cs); return STATUS_UNSUCCESSFUL; }
+         ctx->dir = opendir(dpath);
++        snprintf(ctx->path, sizeof ctx->path, "%s", dpath);
+         if (!ctx->dir) {
+             LeaveCriticalSection(&s_dir_cs);
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+@@ -1209,6 +1325,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     for (;;) {
+         de = readdir(ctx->dir);
+         if (!de) {
++            FTRACE("querydir %s pattern '%s': no more files", dpath ? dpath : "?", ctx->pattern);
+             closedir(ctx->dir);
+             ctx->dir = NULL;
+             ctx->handle = NULL;
+@@ -1222,6 +1339,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+             break;
+     }
+ 
++    FTRACE("querydir %s pattern '%s': '%s'", dpath ? dpath : "?", ctx->pattern, de->d_name);
+     char full[MAX_PATH];
+     snprintf(full, sizeof(full), "%s/%s", dpath ? dpath : ".", de->d_name);
+     if (stat(full, &st) != 0)
+@@ -1340,3 +1458,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
          *ReturnedLength = (ULONG)strlen(target);
      return STATUS_SUCCESS;
  }

@@ -31,6 +31,13 @@
 >   `isatty()` to it; `CMakeLists.txt`), and the Vulkan renderer enables
 >   `VK_KHR_portability_subset` when the driver lists it (only MoltenVK does;
 >   `src/vk/vkr.c`).
+> - **Save/load fixes in the toolkit's POSIX file layer** (macOS and Linux;
+>   Windows already had the first two): directory searches are dropped when
+>   their handle closes (a stale search hid `Data.ssx`: "Unable to load
+>   PLAYER 1", options saves left without data), names relative to a
+>   directory handle resolve against it and directories delete with `rmdir`
+>   (overwriting or deleting a save failed: "Unable to save").
+>   `RECOMP_FILE_TRACE=1` logs every file call.
 > - **Linux build fixes** (the original's `main` did not compile on Linux):
 >   `log.h` was only included on Windows in `src/game_state.c` and
 >   `src/ssx3_overrides.c`; `fb_present_sdl.c` used a function before
