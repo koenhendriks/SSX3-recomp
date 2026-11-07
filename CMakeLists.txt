@@ -162,6 +162,11 @@ elseif(EMSCRIPTEN)
             $<TARGET_FILE_DIR:${PROJECT_NAME}>)
 else()
     target_link_libraries(${PROJECT_NAME} PRIVATE m pthread dl)
+    if(APPLE)
+        # main.c host_display_size: the display's pixel size for the
+        # RECOMP_RES / widescreen "auto" defaults.
+        target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreGraphics")
+    endif()
     # Symbol names (sub_XXXXXXXX) in the crash handler's backtrace.
     target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
 endif()

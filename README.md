@@ -46,6 +46,15 @@
 >   monotonic clock, non-consuming wait-all, the current-thread pseudo handle
 >   in Suspend/Resume/Terminate/GetExitCodeThread, QoS for the audio and tick
 >   threads on macOS, and no App Nap for SSX3.app.
+> - **Game window and launcher on macOS/Linux** (Windows features ported):
+>   triple-buffered presentation with the gamma ramp applied off the window
+>   thread, HiDPI (sharp on Retina), the window sized from the resolution and
+>   the display's shape, widescreen "auto" and the default resolution from the
+>   display at start, fullscreen (F11, Alt+Enter, Cmd+Ctrl+F;
+>   `RECOMP_FULLSCREEN`), the FPS counter (F3) and on-screen messages, a clean
+>   session end on Cmd+Q / window close; launcher rows for fullscreen, FPS
+>   counter, motion blur and the modern camera; on macOS settings, keys.ini,
+>   logs and F12 marks in `~/Library/Application Support/SSX3`.
 > - **Linux build fixes** (the original's `main` did not compile on Linux):
 >   `log.h` was only included on Windows in `src/game_state.c` and
 >   `src/ssx3_overrides.c`; `fb_present_sdl.c` used a function before

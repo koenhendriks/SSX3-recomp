@@ -6,9 +6,12 @@
  * indices) and the same RECOMP_* hand-off as the Windows launcher, so an ini
  * carries over either way. Differences, all from what the Linux build of the
  * game can do:
- *  - no Fullscreen, FPS counter or Audio output rows: the SDL game window
- *    reads neither RECOMP_FULLSCREEN nor RECOMP_FPS_OVERLAY, and 5.1 output
- *    is XAudio2 only. Their keys in the ini are kept as they are.
+ *  - no Audio output row: 5.1 output is XAudio2 only (its ini key is kept).
+ *    Fullscreen, FPS counter, motion blur and the modern camera are here as
+ *    on Windows (the SDL game window handles F11 / F3 too).
+ *  - macOS (SSX3.app): launcher.ini, keys.ini, logs/ and the F12 marks are in
+ *    ~/Library/Application Support/SSX3, the game's working folder, instead
+ *    of inside the app bundle.
  *  - "Auto" resolution is resolved here from the desktop the launcher is on;
  *    main.c asks the monitor only on Windows. "Auto" aspect ratio is passed
  *    on as "auto": the renderer follows the game window's shape.
@@ -188,6 +191,7 @@ static void ini_save(void)
 static char s_path[PATH_MAX];
 static int s_res, s_aspect, s_msaa, s_aniso, s_drawdist, s_shadows;
 static int s_crt, s_hdtex, s_hudedges, s_skipintro, s_fastboot, s_debugmenu, s_moneycheat;
+static int s_fullscreen, s_fps, s_mblur, s_cam;
 static int s_loglevel = 2;
 static int s_game_ok;
 static char s_status[512];
@@ -305,6 +309,10 @@ static void load_settings(void)
     s_drawdist = ini_int("draw_distance", 1);
     s_shadows = ini_int("shadows", 1);
     s_crt = ini_int("crt", 0);
+    s_fullscreen = ini_int("fullscreen", 0);
+    s_fps = ini_int("fps_counter", 0);
+    s_mblur = ini_int("motion_blur", 0);
+    s_cam = ini_int("modern_camera", 0);
     s_hdtex = ini_int("hd_textures", 1);
     s_hudedges = ini_int("hud_edges", 1);
     s_skipintro = ini_int("skip_intro", 1);
@@ -325,6 +333,10 @@ static void save_settings(void)
     ini_set_int("draw_distance", s_drawdist);
     ini_set_int("shadows", s_shadows);
     ini_set_int("crt", s_crt);
+    ini_set_int("fullscreen", s_fullscreen);
+    ini_set_int("fps_counter", s_fps);
+    ini_set_int("motion_blur", s_mblur);
+    ini_set_int("modern_camera", s_cam);
     ini_set_int("hd_textures", s_hdtex);
     ini_set_int("hud_edges", s_hudedges);
     ini_set_int("skip_intro", s_skipintro);
@@ -346,6 +358,10 @@ static void reset_settings(void)
     s_drawdist = 1;
     s_shadows = 1;
     s_crt = 0;
+    s_fullscreen = 0;
+    s_fps = 0;
+    s_mblur = 0;
+    s_cam = 0;
     s_hdtex = 1;
     s_hudedges = 1;
     s_skipintro = 1;
@@ -452,10 +468,57 @@ static void browse(void)
     update_status();
 }
 
+#if defined(__APPLE__)
+static char s_data[PATH_MAX];   /* ~/Library/Application Support/SSX3, or "" */
+
+static int copy_file(const char *from, const char *to)
+{
+    char buf[8192];
+    size_t n;
+    FILE *in = fopen(from, "rb"), *out;
+    if (!in)
+        return 0;
+    out = fopen(to, "wb");
+    if (!out) { fclose(in); return 0; }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    return 1;
+}
+
+static int data_dir_init(void)
+{
+    const char *home = getenv("HOME");
+    char lib[PATH_MAX], ex_from[PATH_MAX + 64], ex_to[PATH_MAX + 32];
+    if (!home || !*home)
+        return 0;
+    snprintf(lib, sizeof lib, "%s/Library/Application Support", home);
+    snprintf(s_data, sizeof s_data, "%s/SSX3", lib);
+    mkdir(lib, 0755);
+    if (mkdir(s_data, 0755) != 0 && !dir_exists(s_data)) {
+        s_data[0] = 0;
+        return 0;
+    }
+    /* keys.example.ini beside keys.ini, as in the Windows release folder */
+    snprintf(ex_from, sizeof ex_from, "%s/../Resources/keys.example.ini", s_dir);
+    snprintf(ex_to, sizeof ex_to, "%s/keys.example.ini", s_data);
+    if (!file_exists(ex_to))
+        copy_file(ex_from, ex_to);
+    return 1;
+}
+#endif
+
 /* The game writes nothing but stdout/stderr; logs/ beside the game folder is
  * where the Windows game puts its log when it has no console. */
 static void logs_dir(char *out, size_t n)
 {
+#if defined(__APPLE__)
+    if (s_data[0]) {                     /* with keys.ini and the F12 marks */
+        snprintf(out, n, "%s/logs", s_data);
+        return;
+    }
+#endif
     char base[PATH_MAX], *slash;
     if (!*s_path || !realpath(s_path, base))
         snprintf(base, sizeof base, "%s/x", s_dir);
@@ -601,6 +664,10 @@ static void play(void)
     env_set("RECOMP_DRAW_DIST", pick(k_drawdist, N(k_drawdist), s_drawdist));
     env_set("RECOMP_SHADOW_RES", pick(k_shadows, N(k_shadows), s_shadows));
     env_set("RECOMP_CRT", s_crt ? "1" : NULL);
+    env_set("RECOMP_FULLSCREEN", s_fullscreen ? "1" : NULL);
+    env_set("RECOMP_FPS_OVERLAY", s_fps ? "1" : NULL);
+    env_set("RECOMP_MBLUR", s_mblur ? "0.5" : NULL);
+    env_set("RECOMP_CAM", s_cam ? "1" : NULL);
     env_set("RECOMP_HDTEX", s_hdtex ? NULL : "0");
     env_set("RECOMP_HUD_EDGES", s_hudedges ? NULL : "0");
     env_set("RECOMP_SKIP_INTRO", s_skipintro ? "1" : "0");
@@ -624,6 +691,12 @@ static void play(void)
         if (!dir_exists(here) && dir_exists(up))
             snprintf(cwd, sizeof cwd, "%s/..", s_dir);
     }
+#if defined(__APPLE__)
+    /* SSX3.app: the data folder (keys.ini, logs/, F12 marks). The game finds
+     * the HD textures in the bundle's Resources by itself. */
+    if (s_data[0])
+        snprintf(cwd, sizeof cwd, "%s", s_data);
+#endif
 
     if (!isatty(STDERR_FILENO)) {
         char logs[PATH_MAX], path[PATH_MAX + 64];
@@ -973,6 +1046,14 @@ static int draw_form(int *want_play)
     checkbox(L, y, 440, "HD textures (Bl4ckH4nd's HD texture pack)", &s_hdtex);
     y += 24;
     checkbox(L, y, 440, "HUD at the screen edges (widescreen)", &s_hudedges);
+    y += 24;
+    checkbox(L, y, 440, "Fullscreen (F11 toggles in game)", &s_fullscreen);
+    y += 24;
+    checkbox(L, y, 440, "FPS counter (F3 toggles in game)", &s_fps);
+    y += 24;
+    checkbox(L, y, 440, "Motion blur (riders stay sharp)", &s_mblur);
+    y += 24;
+    checkbox(L, y, 480, "Modern camera (smoother follow, speed FOV, shake)", &s_cam);
     y += 34;
 
     heading("Game", L, y);
@@ -1101,6 +1182,18 @@ int main(int argc, char **argv)
     if ((slash = strrchr(s_dir, '/')) != NULL)
         *slash = 0;
     snprintf(s_ini, sizeof s_ini, "%s/launcher.ini", s_dir);
+#if defined(__APPLE__)
+    /* SSX3.app: settings, keys.ini, logs and F12 marks live in
+     * ~/Library/Application Support/SSX3, not inside the (signed, replaced
+     * on update) app bundle. */
+    if (data_dir_init()) {
+        char old_ini[PATH_MAX + 16];
+        snprintf(old_ini, sizeof old_ini, "%s", s_ini);
+        snprintf(s_ini, sizeof s_ini, "%s/launcher.ini", s_data);
+        if (!file_exists(s_ini) && file_exists(old_ini))
+            copy_file(old_ini, s_ini);     /* settings from an older build */
+    }
+#endif
 
     if (!getenv("SDL_VIDEO_WAYLAND_WMCLASS") && !getenv("SDL_VIDEO_X11_WMCLASS")) {
         setenv("SDL_VIDEO_WAYLAND_WMCLASS", "ssx3-launcher", 1);

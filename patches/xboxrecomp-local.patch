@@ -8585,10 +8585,10 @@ index 2189a3b..4b8e73a 100644
  endif()
 diff --git a/src/video/fb_gamma.c b/src/video/fb_gamma.c
 new file mode 100644
-index 0000000..165eab0
+index 0000000..1bafbe4
 --- /dev/null
 +++ b/src/video/fb_gamma.c
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,91 @@
 +/* The display's gamma ramp.
 + *
 + * Xbox D3D (SetGammaRamp; SSX 3's sub_00239B76) loads 256 R, G and B entries
@@ -8651,6 +8651,21 @@ index 0000000..165eab0
 +
 +/* The ramp as 256 B8G8R8A8 texels (identity without one), for a presenter
 + * that applies it on the GPU; returns its change serial. */
++/* Copy with the ramp applied (one pass instead of memcpy + ApplyGamma). */
++void xbox_FramebufferGammaCopy(uint32_t *dst, const uint32_t *src, size_t n)
++{
++    size_t i;
++    if (!s_lut_on) {
++        memcpy(dst, src, n * 4);
++        return;
++    }
++    for (i = 0; i < n; i++) {
++        uint32_t c = src[i];
++        dst[i] = (c & 0xFF000000u) | ((uint32_t)s_lut[0][(c >> 16) & 0xFF] << 16)
++               | ((uint32_t)s_lut[1][(c >> 8) & 0xFF] << 8) | s_lut[2][c & 0xFF];
++    }
++}
++
 +unsigned xbox_FramebufferGammaTexels(uint32_t *out256)
 +{
 +    int i;
@@ -9540,10 +9555,10 @@ index 08bae4b..b52ae02 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..394e352
+index 0000000..646c982
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,537 @@
+@@ -0,0 +1,765 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -9620,28 +9635,60 @@ index 0000000..394e352
 +}
 +
 +/* A GPU backend's own full-resolution frame (Vulkan, RECOMP_RES): shown
-+ * instead of the guest surface while it keeps coming. */
++ * instead of the guest surface while it keeps coming.
++ *
++ * Triple buffer, as fb_present.c: the publisher (the renderer's flip thread)
++ * fills the back buffer -- applying the gamma ramp while it copies -- and
++ * swaps it with the middle one; the window loop swaps the middle one to the
++ * front when it is new and only uploads it. The window thread used to copy
++ * the whole frame under the lock the flip thread needs and run the gamma ramp
++ * over every pixel itself: at 2880x2160 that was most of a frame's time on
++ * the macOS main thread, and frames reached the screen unevenly. */
 +static pthread_mutex_t s_hi_lock = PTHREAD_MUTEX_INITIALIZER;
-+static uint32_t *s_hi;
-+static uint32_t  s_hi_w, s_hi_h;
++static uint32_t *s_hb[3];          /* back / middle / front by s_hb_role */
++static int       s_hb_back = 0, s_hb_mid = 1, s_hb_front = 2;
++static uint32_t  s_hi_w, s_hi_h;   /* size of the current s_hb set */
++static uint32_t *s_hb_old[3];      /* the previous set, freed at the next resize */
 +static int       s_hi_new;
 +static double    s_hi_at;
++static volatile int s_flip_gap_max_us;
 +
 +static double now_ms(void);
++void xbox_FramebufferGammaCopy(uint32_t *dst, const uint32_t *src, size_t n);   /* fb_gamma.c */
 +
 +void xbox_FramebufferPublishImage(const uint32_t *px, uint32_t w, uint32_t h)
 +{
++    uint32_t *dst;
++    int i;
++
 +    if (!px || !w || !h)
 +        return;
 +    pthread_mutex_lock(&s_hi_lock);
-+    if (w != s_hi_w || h != s_hi_h) {
-+        free(s_hi);
-+        s_hi = (uint32_t *)malloc((size_t)w * h * 4);
-+        s_hi_w = s_hi ? w : 0;
-+        s_hi_h = s_hi ? h : 0;
++    if (w != s_hi_w || h != s_hi_h || !s_hb[0]) {
++        /* The window thread may still be uploading from the old front
++         * buffer: keep that set until the next resize. */
++        for (i = 0; i < 3; i++) {
++            free(s_hb_old[i]);
++            s_hb_old[i] = s_hb[i];
++            s_hb[i] = (uint32_t *)malloc((size_t)w * h * 4);
++        }
++        if (!s_hb[0] || !s_hb[1] || !s_hb[2]) {
++            for (i = 0; i < 3; i++) { free(s_hb[i]); s_hb[i] = NULL; }
++            s_hi_w = s_hi_h = 0;
++            pthread_mutex_unlock(&s_hi_lock);
++            return;
++        }
++        s_hi_w = w; s_hi_h = h;
++        s_hi_new = 0;
 +    }
-+    if (s_hi) {
-+        memcpy(s_hi, px, (size_t)w * h * 4);
++    dst = s_hb[s_hb_back];
++    pthread_mutex_unlock(&s_hi_lock);
++
++    xbox_FramebufferGammaCopy(dst, px, (size_t)w * h);   /* back buffer: ours alone */
++
++    pthread_mutex_lock(&s_hi_lock);
++    if (s_hb[s_hb_back] == dst) {      /* not resized meanwhile */
++        int t = s_hb_back; s_hb_back = s_hb_mid; s_hb_mid = t;
 +        s_hi_new = 1;
 +        s_hi_at = now_ms();
 +    }
@@ -9708,6 +9755,17 @@ index 0000000..394e352
 +
 +    __atomic_fetch_add(&s_flips, 1, __ATOMIC_RELAXED);
 +    s_frame_draws = (int)draws;
++    {
++        /* The longest gap between two flips, for the FPS overlay's MAX. */
++        static double prev;
++        double tn = now_ms();
++        if (prev) {
++            int gap = (int)((tn - prev) * 1000.0);
++            if (gap > __atomic_load_n(&s_flip_gap_max_us, __ATOMIC_RELAXED))
++                __atomic_store_n(&s_flip_gap_max_us, gap, __ATOMIC_RELAXED);
++        }
++        prev = tn;
++    }
 +    if (on < 0) {
 +        const char *e = getenv("RECOMP_FRAME_STATS");
 +        on = e && *e && *e != '0';
@@ -9858,8 +9916,9 @@ index 0000000..394e352
 +     * the internal resolution and in widescreen) when there is a current
 +     * one, else the guest framebuffer, which that renderer leaves unused. */
 +    pthread_mutex_lock(&s_hi_lock);
-+    if (s_hi && now_ms() - s_hi_at < 250.0) {
-+        write_bmp(path, s_hi, s_hi_w, s_hi_h);
++    if (s_hb[0] && s_hi_at && now_ms() - s_hi_at < 250.0) {
++        /* the latest complete frame, as shown (gamma applied) */
++        write_bmp(path, s_hb[s_hb_mid], s_hi_w, s_hi_h);
 +        pthread_mutex_unlock(&s_hi_lock);
 +        return;
 +    }
@@ -9869,14 +9928,129 @@ index 0000000..394e352
 +    s_dump_quiet = 0;
 +}
 +
++/* ---- FPS overlay (F3) and on-screen messages, as fb_present.c ---------- */
++static volatile int s_overlay = -1;
++static char s_overlay_text[48];
++static char s_osd_text[64];
++static volatile double s_osd_until;
++
++static int fps_overlay_on(void)
++{
++    if (s_overlay < 0) {
++        const char *e = getenv("RECOMP_FPS_OVERLAY");
++        s_overlay = e && *e && *e != '0';
++    }
++    return s_overlay > 0;
++}
++
++/* 5x7 glyphs, one byte per row, bit 4 = leftmost column. */
++static const unsigned char *glyph(char ch)
++{
++    static const unsigned char g_digits[10][7] = {
++        {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},
++        {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},
++        {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},
++        {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}, {0x1F,0x01,0x02,0x04,0x08,0x08,0x08},
++        {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}};
++    static const struct { char c; unsigned char rows[7]; } g_letters[] = {
++        {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'B', {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}},
++        {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}}, {'D', {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}},
++        {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}}, {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
++        {'G', {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}}, {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}},
++        {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}}, {'J', {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}},
++        {'K', {0x11,0x12,0x14,0x18,0x14,0x12,0x11}}, {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
++        {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}}, {'N', {0x11,0x19,0x15,0x13,0x11,0x11,0x11}},
++        {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
++        {'Q', {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}}, {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
++        {'S', {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}}, {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
++        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'V', {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}},
++        {'W', {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}}, {'X', {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
++        {'Y', {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}}, {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
++        {'.', {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}}, {':', {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00}},
++        {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}}, {'/', {0x01,0x01,0x02,0x04,0x08,0x10,0x10}},
++        {'(', {0x02,0x04,0x08,0x08,0x08,0x04,0x02}}, {')', {0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
++        {'%', {0x18,0x19,0x02,0x04,0x08,0x13,0x03}}};
++    size_t i;
++    if (ch >= '0' && ch <= '9')
++        return g_digits[ch - '0'];
++    if (ch >= 'a' && ch <= 'z')
++        ch = (char)(ch - 'a' + 'A');
++    for (i = 0; i < sizeof g_letters / sizeof g_letters[0]; i++)
++        if (g_letters[i].c == ch)
++            return g_letters[i].rows;
++    return NULL;                        /* space */
++}
++
++/* One line of text in a darkened box at (x0, y0), sc pixels per font pixel. */
++static void overlay_line(uint32_t *px, uint32_t w, uint32_t h, const char *text, int x0, int y0, int sc)
++{
++    int len = (int)strlen(text), i, bw, bh, x, y;
++    if (!len)
++        return;
++    bw = (len * 6 + 2) * sc; bh = 10 * sc;
++    if (x0 + bw > (int)w) bw = (int)w - x0;
++    for (y = y0; y < y0 + bh && y < (int)h; y++)
++        for (x = x0; x < x0 + bw; x++) {
++            uint32_t p = px[(size_t)y * w + x];
++            px[(size_t)y * w + x] = (p & 0xFF000000u) | ((p >> 2) & 0x3F3F3F);
++        }
++    for (i = 0; i < len; i++) {
++        const unsigned char *g = glyph(text[i]);
++        int r, cx, gx = x0 + (i * 6 + 1) * sc, gy = y0 + sc + sc / 2;
++        if (!g)
++            continue;
++        for (r = 0; r < 7; r++)
++            for (cx = 0; cx < 5; cx++)
++                if (g[r] & (0x10 >> cx))
++                    for (y = gy + r * sc; y < gy + (r + 1) * sc && y < (int)h; y++)
++                        for (x = gx + cx * sc; x < gx + (cx + 1) * sc && x < (int)w; x++)
++                            px[(size_t)y * w + x] = 0xFFFFFFFFu;
++    }
++}
++
++/* Draws the overlay into a frame about to be uploaded. Returns 1 if it drew. */
++static int overlay_draw(uint32_t *px, uint32_t w, uint32_t h)
++{
++    char text[64];
++    int sc = (int)(h / 240u), y0, drew = 0;
++    if (!px || w < 64 || h < 32)
++        return 0;
++    if (sc < 2) sc = 2;
++    y0 = sc * 3;
++    if (fps_overlay_on()) {
++        memcpy(text, s_overlay_text, sizeof s_overlay_text);
++        text[sizeof s_overlay_text - 1] = 0;
++        overlay_line(px, w, h, text, sc * 3, y0, sc);
++        y0 += 11 * sc;
++        drew = 1;
++    }
++    if (now_ms() < s_osd_until) {
++        memcpy(text, s_osd_text, sizeof text);
++        text[sizeof text - 1] = 0;
++        overlay_line(px, w, h, text, sc * 3, y0, sc);
++        drew = 1;
++    }
++    return drew;
++}
++
++/* Fullscreen on the window's display (F11, Alt+Enter, Cmd+Ctrl+F;
++ * RECOMP_FULLSCREEN=1 to start in it). Desktop fullscreen: on macOS that is
++ * the system's own fullscreen Space. */
++static void toggle_fullscreen(SDL_Window *win)
++{
++    int full = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
++    SDL_SetWindowFullscreen(win, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
++    fprintf(stderr, "[FBWIN] fullscreen %s\n", full ? "off" : "on");
++}
++
 +static void *fb_thread(void *unused)
 +{
 +    SDL_Window *win;
 +    SDL_Renderer *ren;
 +    SDL_Texture *tex, *hi_tex = NULL;
-+    uint32_t *hi_rgb = NULL, hi_w = 0, hi_h = 0;
++    uint32_t hi_w = 0, hi_h = 0;
 +    double t0 = 0;
-+    int f0 = 0;
++    int f0 = 0, shown_new = 0;
 +
 +    (void)unused;
 +    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
@@ -9884,10 +10058,43 @@ index 0000000..394e352
 +        s_fb_running = 0;
 +        return NULL;
 +    }
-+    win = SDL_CreateWindow("Xbox Recomp - Framebuffer",
-+                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-+                           (int)s_fb_width, (int)s_fb_height,
-+                           SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
++    {
++        /* As fb_present.c: the frame times the internal resolution's scale
++         * (RECOMP_RES) in the renderer's frame shape (RECOMP_ASPECT), made
++         * smaller until it fits the display's usable area, centred. Sizes
++         * here are in points; HiDPI gives the full pixel resolution on a
++         * Retina display (the window used to open at 640x480 points and be
++         * scaled up by the compositor -- blurry). */
++        const char *res = getenv("RECOMP_RES"), *asp = getenv("RECOMP_ASPECT");
++        double rv = res ? atof(res) : 0, aspect = 4.0 / 3.0, scale = 2.0, pts;
++        float ddpi = 0, hdpi = 0, vdpi = 0;
++        SDL_Rect usable = {0, 0, 1280, 800};
++        int ww, wh;
++        if (asp && atof(asp) > 4.0 / 3.0 + 0.01)
++            aspect = atof(asp);
++        if (rv >= 240) scale = rv / 480.0;
++        else if (rv >= 1.0 && rv <= 8.0) scale = rv;
++        SDL_GetDisplayUsableBounds(0, &usable);
++        /* Points per pixel: about 2 on a Retina display. */
++        pts = 1.0;
++#if defined(__APPLE__)
++        if (SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) == 0 && hdpi > 150.0f)
++            pts = 0.5;
++#else
++        (void)ddpi; (void)hdpi; (void)vdpi;
++#endif
++        for (;; scale -= 0.25) {
++            double s = scale > 1.0 ? scale : 1.0;
++            wh = (int)(s_fb_height * s * pts + 0.5);
++            ww = (int)(wh * aspect + 0.5);
++            if (scale <= 1.0 || (ww <= usable.w * 95 / 100 && wh <= usable.h * 95 / 100))
++                break;
++        }
++        win = SDL_CreateWindow("Xbox Recomp - Framebuffer",
++                               usable.x + (usable.w - ww) / 2, usable.y + (usable.h - wh) / 2,
++                               ww, wh,
++                               SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
++    }
 +    ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_PRESENTVSYNC) : NULL;
 +    tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
 +                                  SDL_TEXTUREACCESS_STREAMING,
@@ -9899,8 +10106,18 @@ index 0000000..394e352
 +    }
 +    SDL_RenderSetLogicalSize(ren, (int)s_fb_width, (int)s_fb_height);
 +    s_rgb = (uint32_t *)calloc((size_t)s_fb_width * s_fb_height, 4);
-+    fprintf(stderr, "  [FBWIN] framebuffer window open (%ux%u)\n",
-+            s_fb_width, s_fb_height);
++    {
++        int ww, wh, pw, ph;
++        SDL_GetWindowSize(win, &ww, &wh);
++        SDL_GetRendererOutputSize(ren, &pw, &ph);
++        fprintf(stderr, "  [FBWIN] framebuffer window open (%dx%d points, %dx%d pixels)\n",
++                ww, wh, pw, ph);
++    }
++    {
++        const char *fs = getenv("RECOMP_FULLSCREEN");
++        if (fs && *fs && *fs != '0')
++            toggle_fullscreen(win);
++    }
 +
 +    while (s_fb_running) {
 +        SDL_Event e;
@@ -9908,11 +10125,23 @@ index 0000000..394e352
 +
 +        while (SDL_PollEvent(&e)) {
 +            if (e.type == SDL_QUIT) {
-+                /* Window close, and SDL turns SIGINT/SIGTERM into this too.
-+                 * Closing only the window left the game running and the
-+                 * next flip reopened it. */
++                /* Window close, Cmd+Q, and SDL turns SIGINT/SIGTERM into this
++                 * too. Closing only the window left the game running and the
++                 * next flip reopened it. Like fb_present.c, let the title's
++                 * exit hook end the session first (log pump drained, session
++                 * summary written). */
++                extern void xbox_BeforeExit(void);
++                xbox_BeforeExit();
 +                fflush(NULL);
 +                _exit(0);
++            } else if (e.type == SDL_KEYDOWN && !e.key.repeat &&
++                       (e.key.keysym.sym == SDLK_F11 ||
++                        (e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT)) ||
++                        (e.key.keysym.sym == SDLK_f && (e.key.keysym.mod & KMOD_GUI)
++                                                    && (e.key.keysym.mod & KMOD_CTRL)))) {
++                toggle_fullscreen(win);       /* not a key for the game */
++            } else if (e.type == SDL_KEYDOWN && !e.key.repeat && e.key.keysym.sym == SDLK_F3) {
++                s_overlay = !fps_overlay_on();
 +            } else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
 +                int vk = sdl_to_vk(e.key.keysym.sym);
 +                /* RECOMP_KEY_TRACE: each key as it arrives, as in fb_present.c,
@@ -9949,31 +10178,35 @@ index 0000000..394e352
 +            __atomic_store_n(&s_client_h, ch, __ATOMIC_RELAXED);
 +        }
 +        pthread_mutex_lock(&s_hi_lock);
-+        if (s_hi && now_ms() - s_hi_at < 250.0) {
-+            int fresh = s_hi_new;
++        if (s_hb[0] && s_hi_at && now_ms() - s_hi_at < 250.0) {
++            int fresh = 0;
++            uint32_t *front;
++            if (s_hi_new) {             /* take the newest complete frame */
++                int t = s_hb_front; s_hb_front = s_hb_mid; s_hb_mid = t;
++                s_hi_new = 0;
++                fresh = 1;
++            }
++            front = s_hb[s_hb_front];
 +            if (s_hi_w != hi_w || s_hi_h != hi_h) {
 +                if (hi_tex) SDL_DestroyTexture(hi_tex);
-+                free(hi_rgb);
 +                hi_w = s_hi_w; hi_h = s_hi_h;
-+                hi_rgb = (uint32_t *)malloc((size_t)hi_w * hi_h * 4);
 +                hi_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
 +                                           SDL_TEXTUREACCESS_STREAMING, (int)hi_w, (int)hi_h);
 +                SDL_RenderSetLogicalSize(ren, (int)hi_w, (int)hi_h);
 +                fresh = 1;
 +            }
-+            if (fresh && hi_rgb)
-+                memcpy(hi_rgb, s_hi, (size_t)hi_w * hi_h * 4);
-+            s_hi_new = 0;
 +            pthread_mutex_unlock(&s_hi_lock);
-+            if (hi_tex && hi_rgb) {
++            if (hi_tex) {
++                /* Only the front buffer is ours here, until the next swap. */
 +                if (fresh) {
-+                    xbox_FramebufferApplyGamma(hi_rgb, (size_t)hi_w * hi_h);
-+                    SDL_UpdateTexture(hi_tex, NULL, hi_rgb, (int)(hi_w * 4));
++                    overlay_draw(front, hi_w, hi_h);
++                    SDL_UpdateTexture(hi_tex, NULL, front, (int)(hi_w * 4));
++                    shown_new++;
 +                }
 +                SDL_RenderClear(ren);
 +                SDL_RenderCopy(ren, hi_tex, NULL, NULL);
 +                SDL_RenderPresent(ren);
-+                snap_trigger_poll(hi_rgb, hi_w, hi_h);
++                snap_trigger_poll(NULL, 0, 0);
 +                goto shown;
 +            }
 +        } else {
@@ -9997,7 +10230,9 @@ index 0000000..394e352
 +                               s_fb_pitch / s_fb_width);
 +        }
 +        xbox_FramebufferApplyGamma(s_rgb, (size_t)s_fb_width * s_fb_height);
++        overlay_draw(s_rgb, s_fb_width, s_fb_height);
 +        SDL_UpdateTexture(tex, NULL, s_rgb, (int)(s_fb_width * 4));
++        shown_new++;
 +        SDL_RenderClear(ren);
 +        SDL_RenderCopy(ren, tex, NULL, NULL);
 +        SDL_RenderPresent(ren);
@@ -10008,15 +10243,18 @@ index 0000000..394e352
 +            if (now - t0 >= 1000.0) {
 +                int f = s_flips;
 +                char tb[128];
++                int gap = __atomic_exchange_n(&s_flip_gap_max_us, 0, __ATOMIC_RELAXED);
 +                snprintf(tb, sizeof tb, "%s | FPS: %.1f | draws: %d", s_title,
 +                         t0 ? (f - f0) * 1000.0 / (now - t0) : 0.0, s_frame_draws);
 +                SDL_SetWindowTitle(win, tb);
++                snprintf(s_overlay_text, sizeof s_overlay_text, "FPS %d  SHOWN %d  MAX %dMS",
++                         f - f0, shown_new, (gap + 500) / 1000);
++                shown_new = 0;
 +                t0 = now; f0 = f;
 +            }
 +        }
 +    }
 +    if (hi_tex) SDL_DestroyTexture(hi_tex);
-+    free(hi_rgb);
 +    SDL_DestroyTexture(tex);
 +    SDL_DestroyRenderer(ren);
 +    SDL_DestroyWindow(win);
@@ -10076,10 +10314,15 @@ index 0000000..394e352
 +}
 +#endif /* !_WIN32 */
 +
-+/* No overlay in this presenter: the message goes to the log. */
++/* A message shown for a few seconds under the FPS line (e.g. a setting
++ * changed with a key), and in the log. */
 +void xbox_FramebufferOsd(const char *text)
 +{
 +    fprintf(stderr, "  [FBWIN] %s\n", text ? text : "");
++#if !defined(_WIN32)
++    snprintf(s_osd_text, sizeof s_osd_text, "%s", text ? text : "");
++    s_osd_until = now_ms() + 3000.0;
++#endif
 +}
 diff --git a/src/video/fb_present_web.c b/src/video/fb_present_web.c
 new file mode 100644

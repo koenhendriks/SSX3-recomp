@@ -353,6 +353,39 @@ void print_guest_regs_and_stack(void)
     }
 }
 
+#if defined(__APPLE__) && !defined(_WIN32)
+/* CoreGraphics, declared here: its headers clash with the Win32 vocabulary
+ * (BOOL, ...) this file uses. Safe from any thread, unlike SDL video. */
+typedef uint32_t CGDirectDisplayID;
+typedef struct CGDisplayMode *CGDisplayModeRef;
+extern CGDirectDisplayID CGMainDisplayID(void);
+extern CGDisplayModeRef CGDisplayCopyDisplayMode(CGDirectDisplayID display);
+extern size_t CGDisplayModeGetPixelWidth(CGDisplayModeRef mode);
+extern size_t CGDisplayModeGetPixelHeight(CGDisplayModeRef mode);
+extern void CGDisplayModeRelease(CGDisplayModeRef mode);
+#endif
+
+/* The primary display's size in pixels (0 if unknown), for the RECOMP_RES and
+ * widescreen "auto" defaults. Windows only had this before; on macOS the game
+ * started at 1080 and 4:3 until the window was resized. */
+static void host_display_size(int *cx, int *cy)
+{
+    *cx = *cy = 0;
+#ifdef _WIN32
+    *cx = GetSystemMetrics(SM_CXSCREEN);
+    *cy = GetSystemMetrics(SM_CYSCREEN);
+#elif defined(__APPLE__)
+    {
+        CGDisplayModeRef m = CGDisplayCopyDisplayMode(CGMainDisplayID());
+        if (m) {
+            *cx = (int)CGDisplayModeGetPixelWidth(m);
+            *cy = (int)CGDisplayModeGetPixelHeight(m);
+            CGDisplayModeRelease(m);
+        }
+    }
+#endif
+}
+
 void print_guest_stack(void)
 {
     if (g_xbox_mem_offset && g_esp) {
@@ -856,11 +889,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (!getenv("RECOMP_RES")) {
         /* The primary monitor's height (1080, 1440, 2160...), so fullscreen
          * is sharp; 1080 if unknown. */
-        int cy = 0;
+        int cx = 0, cy = 0;
         char buf[16];
-#ifdef _WIN32
-        cy = GetSystemMetrics(SM_CYSCREEN);
-#endif
+        host_display_size(&cx, &cy);
         snprintf(buf, sizeof buf, "%d", cy >= 480 ? cy : 1080);
         _putenv_s("RECOMP_RES", buf);
     }
@@ -877,10 +908,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         const char *ws = getenv("RECOMP_WIDESCREEN");
         double a = 0;
         if (ws && !strcmp(ws, "auto")) {
-#ifdef _WIN32
-            int cx = GetSystemMetrics(SM_CXSCREEN), cy = GetSystemMetrics(SM_CYSCREEN);
+            int cx = 0, cy = 0;
+            host_display_size(&cx, &cy);
             a = cy > 0 ? (double)cx / cy : 0;
-#endif
         } else if (ws && strchr(ws, ':')) {
             double w = atof(ws), h = atof(strchr(ws, ':') + 1);
             a = h > 0 ? w / h : 0;
