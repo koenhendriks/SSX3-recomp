@@ -239,6 +239,9 @@ else()
         set_target_properties(ssx3_launcher PROPERTIES OUTPUT_NAME launcher)
         target_link_libraries(ssx3_launcher PRIVATE SDL2::SDL2 SDL2_ttf::SDL2_ttf
                               Fontconfig::Fontconfig)
+        if(APPLE)   # system_language(): CFLocaleCopyPreferredLanguages
+            target_link_libraries(ssx3_launcher PRIVATE "-framework CoreFoundation")
+        endif()
         target_include_directories(ssx3_launcher PRIVATE ${CMAKE_BINARY_DIR})   # build_info.h
         add_dependencies(ssx3_launcher ssx3_build_info)
     else()

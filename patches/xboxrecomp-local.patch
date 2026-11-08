@@ -3900,7 +3900,7 @@ index 4fd7692..d943575 100644
                  break;  /* rest of the table is empty */
              }
 diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
-index 4ebdfb9..eb90149 100644
+index 4ebdfb9..fc02ac6 100644
 --- a/src/kernel/kernel_xbox.c
 +++ b/src/kernel/kernel_xbox.c
 @@ -10,7 +10,10 @@
@@ -3914,7 +3914,7 @@ index 4ebdfb9..eb90149 100644
  
  /* ============================================================================
   * Exported Data Objects
-@@ -125,11 +128,116 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
+@@ -125,20 +128,140 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
   *   - DVD Region: Region 1 (North America)
   * ============================================================================ */
  
@@ -4031,7 +4031,33 @@ index 4ebdfb9..eb90149 100644
  
      xbox_log(XBOX_LOG_DEBUG, XBOX_LOG_XBOX,
          "ExQueryNonVolatileSetting: index=0x%02X len=%u", ValueIndex, ValueLength);
-@@ -194,14 +302,58 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
+ 
+     switch (ValueIndex) {
+     case XC_LANGUAGE:
+-        /* English = 1 */
++        /* The console's language (XGetLanguage): 1 English, 2 Japanese,
++         * 3 German, 4 French, 5 Spanish, 6 Italian, 7 Korean, 8 Chinese,
++         * 9 Portuguese. RECOMP_LANGUAGE = that number or en/ja/de/fr/es/it/
++         * ko/zh/pt (the launchers' Language setting); English otherwise. */
+         if (ValueLength >= sizeof(ULONG)) {
+-            *(PULONG)Value = 1;
++            static const char *codes[] = {"en", "ja", "de", "fr", "es", "it", "ko", "zh", "pt"};
++            const char *e = getenv("RECOMP_LANGUAGE");
++            ULONG lang = 1;
++            int k;
++            if (e && *e) {
++                if (atoi(e) >= 1 && atoi(e) <= 9)
++                    lang = (ULONG)atoi(e);
++                else
++                    for (k = 0; k < 9; k++)
++                        if ((e[0] | 0x20) == codes[k][0] && (e[1] | 0x20) == codes[k][1])
++                            lang = (ULONG)(k + 1);
++            }
++            *(PULONG)Value = lang;
+             if (Type) *Type = 4; /* REG_DWORD */
+             if (ResultLength) *ResultLength = sizeof(ULONG);
+         }
+@@ -194,14 +317,58 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
          break;
  
      case XC_TIMEZONE_BIAS:
