@@ -1,69 +1,9 @@
-# ssx3-recomp — macOS fork
-
-> **This is a fork of [koenhendriks/SSX3-recomp](https://github.com/koenhendriks/SSX3-recomp)
-> that adds a native macOS (Apple silicon) version.** Everything else — the
-> recompilation, the renderer, the game fixes, Windows and Linux — is the
-> original project's work. Download the Mac app from the
-> [releases](https://github.com/Zangetsu-Sama/SSX3-recomp/releases)
-> (`SSX3-recomp-macos-arm64.dmg`); setup and building are in
-> [docs/MACOS.md](docs/MACOS.md).
->
-> **What this fork changes compared to the original**
->
-> - **New:** `macos/` (Docker cross-build from a Mac: toolchain, dependency
->   build, packaging into `SSX3.app` / `.dmg`), `docs/MACOS.md`, `src/uc_regs.h`.
-> - **macOS code paths**, all behind `__APPLE__` or in POSIX-only files, so
->   Windows is unchanged:
->   - the game runs on a second thread and the window loop on the main thread,
->     which Cocoa requires (`src/main.c`, toolkit `fb_present_sdl.c`);
->   - the device-register fault handler reads Darwin's signal context and also
->     takes SIGBUS (`src/mmio_posix.c`, `src/main.c`);
->   - thread dumps through Mach threads (`src/thread_dump.c`), the exe path via
->     `_NSGetExecutablePath`, HD textures also in `SSX3.app/Contents/Resources`
->     (`src/vk/vkr_hdtex.c`);
->   - the SDL launcher uses the system fonts, the Finder folder dialog and
->     `open` instead of fontconfig, zenity/kdialog and xdg-open
->     (`src/launcher/launcher_sdl.c`);
->   - toolkit patch: the POSIX exception structs for `__APPLE__`, no OpenSSL
->     on macOS (nothing used it).
-> - **Shared changes, no effect on Windows:** the game function Ghidra named
->   `isatty` is renamed in the generated sources (macOS bound the host's
->   `isatty()` to it; `CMakeLists.txt`), and the Vulkan renderer enables
->   `VK_KHR_portability_subset` when the driver lists it (only MoltenVK does;
->   `src/vk/vkr.c`).
-> - **Save/load fixes in the toolkit's POSIX file layer** (macOS and Linux;
->   Windows already had the first two): directory searches are dropped when
->   their handle closes (a stale search hid `Data.ssx`: "Unable to load
->   PLAYER 1", options saves left without data), names relative to a
->   directory handle resolve against it and directories delete with `rmdir`
->   (overwriting or deleting a save failed: "Unable to save").
->   `RECOMP_FILE_TRACE=1` logs every file call.
-> - **Engine fixes for macOS/Linux** (POSIX gaps the Windows build does not
->   have): no int64 overflow in the QEMU clock helpers (the APU clock went
->   wrong seconds after host boot), a working `PulseEvent`, 8 MB guest thread
->   stacks (macOS defaulted to 512 KB), atomic `pread`/`pwrite` for offset I/O,
->   the host time zone for XAPI (saves showed UTC), timed waits on the
->   monotonic clock, non-consuming wait-all, the current-thread pseudo handle
->   in Suspend/Resume/Terminate/GetExitCodeThread, QoS for the audio and tick
->   threads on macOS, and no App Nap for SSX3.app.
-> - **Game window and launcher on macOS/Linux** (Windows features ported):
->   triple-buffered presentation with the gamma ramp applied off the window
->   thread, HiDPI (sharp on Retina), the window sized from the resolution and
->   the display's shape, widescreen "auto" and the default resolution from the
->   display at start, fullscreen (F11, Alt+Enter, Cmd+Ctrl+F;
->   `RECOMP_FULLSCREEN`), the FPS counter (F3) and on-screen messages, a clean
->   session end on Cmd+Q / window close; launcher rows for fullscreen, FPS
->   counter, motion blur and the modern camera; on macOS settings, keys.ini,
->   logs and F12 marks in `~/Library/Application Support/SSX3`.
-> - **Linux build fixes** (the original's `main` did not compile on Linux):
->   `log.h` was only included on Windows in `src/game_state.c` and
->   `src/ssx3_overrides.c`; `fb_present_sdl.c` used a function before
->   declaring it.
+# ssx3-recomp
 
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/434-ssx-3/)
 
 Static recompilation of **SSX 3** (original Xbox, PAL) into a native program
-for **Windows and Linux**, built with
+for **Windows, Linux and macOS**, built with
 [xboxrecomp](https://github.com/sp00nznet/xboxrecomp). The game's own code
 runs as native code, and the Xbox GPU is emulated on Vulkan. It plays at
 **60 FPS**, at your monitor's resolution, in **true widescreen** (16:9, 21:9
@@ -77,7 +17,7 @@ or 32:9), with HD textures, anti-aliasing and a longer view.
 | **Windows** (x86-64) | Fully supported: the release download, the launcher, everything below. |
 | **Linux** (x86-64) | Boots to a race at 60 FPS on the Vulkan renderer, with its own launcher. Build it yourself (see [Build](#build)). |
 | **Linux on Apple Silicon Macs** (arm64, [Asahi Linux](https://asahilinux.org)) | Boots through the intro to the menus. Gameplay not checked yet. |
-| **macOS** (Apple silicon, native) | Boots, menus, launcher and races at 60 FPS (Vulkan on MoltenVK). `SSX3.app` in the [macOS releases](https://github.com/Zangetsu-Sama/SSX3-recomp/releases); see [docs/MACOS.md](docs/MACOS.md). |
+| **macOS** (Apple silicon, native) | Boots, menus, launcher and races at 60 FPS (Vulkan on MoltenVK). Build it yourself (`macos/`, from a Mac with Docker); see [docs/MACOS.md](docs/MACOS.md). |
 
 No game data or game code is in this repository. You need your own rip of the
 disc (`default.xbe` + `data/`); everything derived from it is regenerated by

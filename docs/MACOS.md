@@ -7,7 +7,7 @@ Snow Jam race at 60 FPS (2583x1440, MSAA 4x).
 
 ## Play
 
-1. Download `SSX3-recomp-macos-arm64.dmg` from the [releases](https://github.com/Zangetsu-Sama/SSX3-recomp/releases), open it and drag `SSX3.app`
+1. Download `SSX3-recomp-macos-arm64.dmg` from a release (or build it, below), open it and drag `SSX3.app`
    onto Applications (a `.zip` of the same app is there too).
 2. The app is ad-hoc signed, not notarised. First start: right-click (Control-click)
    `SSX3.app` > Open > Open. On macOS 15 and newer, if that is refused: System Settings >
