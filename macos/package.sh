@@ -4,7 +4,13 @@
 # -> the app icon.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(dirname "$HERE")"
-B="$ROOT/build-macos-arm64"; OUT="$ROOT/dist-macos"; APP="$OUT/SSX3.app"; VER="${VER:-0.2.7-macos1}"
+B="$ROOT/build-macos-arm64"; OUT="$ROOT/dist-macos"; VER="${VER:-0.2.7-macos1}"
+# Assembled, signed and imaged in a temporary folder: a folder synced by
+# iCloud / File Provider (Desktop, Documents) adds Finder info to a new
+# bundle, which codesign refuses. Only the results go to $OUT.
+WORK="$(mktemp -d)"; APP="$WORK/SSX3.app"
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$OUT"
 NAME="SSX3-recomp-macos-arm64"
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/licenses"
 # Only code in Contents/MacOS: other files there would carry their signature in
@@ -43,7 +49,9 @@ STAGE="$(mktemp -d)/SSX 3"; mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/SSX3.app"
 ln -s /Applications "$STAGE/Applications"
 cp "$HERE/macos/READ-ME-FIRST.txt" "$STAGE/" 2>/dev/null || true
-rm -f "$OUT/$NAME.dmg"
-hdiutil create -volname "SSX 3" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$OUT/$NAME.dmg" >/dev/null
-( cd "$OUT" && rm -f "$NAME.zip" && ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent SSX3.app "$NAME.zip" )
+hdiutil create -volname "SSX 3" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$WORK/$NAME.dmg" >/dev/null
+( cd "$WORK" && ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent SSX3.app "$NAME.zip" )
+rm -rf "$OUT/SSX3.app" "$OUT/$NAME.dmg" "$OUT/$NAME.zip"
+cp "$WORK/$NAME.dmg" "$WORK/$NAME.zip" "$OUT/"
+ditto "$APP" "$OUT/SSX3.app"          # a local copy to try (not the signed artefact)
 ls -la "$OUT/$NAME.dmg" "$OUT/$NAME.zip"
