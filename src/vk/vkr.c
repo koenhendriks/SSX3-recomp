@@ -2685,11 +2685,25 @@ int vkr_flip_submit(VkrContext *c)
     if (!begin_cmd(c)) return -1;
     frame = c->resolved ? c->resolved : c->color;
     if (c->squeeze_all > 0.5f) {
-        /* Pillarboxed frame: the bars are black (nothing draws there). */
+        /* Pillarboxed frame: the bars are black (nothing draws there).
+         * The right bar also takes the menus' overscan strip: SSX 3's menu
+         * backgrounds stop ~9 guest pixels short of x = 640 (hidden by a TV's
+         * overscan), and what the game still draws there -- the end of the
+         * title rule, bits of snowflakes, a stray mark -- showed as broken
+         * lines at the picture's right edge on a monitor (the Windows build
+         * too). RECOMP_MENU_CROP_R=<guest px> (default 9, 0 = off). */
+        static int crop_r = -1;
         VkClearAttachment ca = {VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0, 0, 0, 1}}}};
-        uint32_t bw = (uint32_t)(((float)c->sw - (float)c->w * c->scale) * 0.5f);
+        uint32_t bw = (uint32_t)(((float)c->sw - (float)c->w * c->scale) * 0.5f), bwr;
+        if (crop_r < 0) {
+            const char *e = getenv("RECOMP_MENU_CROP_R");
+            crop_r = e && *e ? atoi(e) : 9;
+            if (crop_r < 0 || crop_r > 64) crop_r = 9;
+        }
+        bwr = bw + (uint32_t)((float)crop_r * c->scale + 0.5f);
+        if (bwr > c->sw / 2) bwr = bw;
         VkClearRect cr[2] = {{{{0, 0}, {bw, c->sh}}, 0, 1},
-                             {{{(int32_t)(c->sw - bw), 0}, {bw, c->sh}}, 0, 1}};
+                             {{{(int32_t)(c->sw - bwr), 0}, {bwr, c->sh}}, 0, 1}};
         if (bw) {
             begin_pass(c);
             vkCmdClearAttachments(c->cmd, 1, &ca, 2, cr);
