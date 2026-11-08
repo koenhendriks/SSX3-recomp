@@ -647,7 +647,7 @@ static void bind_textures(VkrDrawState *st)
                      * key nothing looks up, so the next frame tries again. */
                     uint64_t pk = hdtex_key(px, ti.width, ti.height);
                     int r;
-                    hdtex_dump(pk, px, ti.width, ti.height, ti.format);
+                    hdtex_dump(pk, ti.offset, now_ms(), px, ti.width, ti.height, ti.format);
                     r = hdtex_get(s_vk, pk, ti.hash, &tex);
                     if (r < 0)
                         key = ti.hash ^ 0x8000000000000000ull;
