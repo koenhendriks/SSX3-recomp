@@ -2,8 +2,16 @@
  * RECOMP_AUTONAV: drive the frontend from inside the process, from boot to a
  * race, by the game's own state -- the in-process twin of tools\to_race.ps1.
  *
- *   RECOMP_AUTONAV=race[,rider=N][,peak=N][,mode=N][,event=N][,brief]
+ *   RECOMP_AUTONAV=race[,main=N][,rider=N][,peak=N][,mode=N][,event=N][,brief]
  *
+ * main = up presses on the main menu before A (0 = the cursor's item, Single
+ * Event);
+ *
+ *   RECOMP_AUTONAV=keys:up,up,a,down,a
+ *
+ * keys: for menu tests, once the main menu takes input, press these buttons
+ * (up down left right a b x y start back) 700 ms apart, log
+ * "[AUTONAV] keys done" and stop.
  * rider = right presses on Select Character, peak = down presses on the
  * peak page (0-2: up presses, the list is Peak 3, 2, 1 with the cursor on 1;
  * Peaks 2/3 need the unlocked save), mode = down presses on the mode
@@ -48,7 +56,7 @@
 extern int xbox_PadInject(const char *line);
 extern volatile uint32_t g_ssx3_ui_screen_vt, g_ssx3_ui_screen_id, g_ssx3_ui_screen_ptr;
 
-static int s_rider, s_peak, s_mode, s_event, s_brief;
+static int s_main, s_rider, s_peak, s_mode, s_event, s_brief;
 static DWORD s_t0;
 /* Set when autonav reaches the briefing (RECOMP_VKR_TRACE_BRIEF times from it). */
 volatile int g_ssx3_at_briefing;
@@ -85,7 +93,7 @@ static uint32_t app_vt(void)
 
 static DWORD WINAPI autonav_thread(LPVOID unused)
 {
-    uint32_t act_ptr = 0, done_ptr = 0;
+    uint32_t act_ptr = 0, done_ptr = 0, done_id = 0;
     DWORD act_since = 0, done_at = 0, ingame_since = 0, brief_since = 0;
     int loading_seen = 0, skipped = 0;
     uint32_t last_sp = 0, pre_ingame_sp = 0;
@@ -181,7 +189,9 @@ static DWORD WINAPI autonav_thread(LPVOID unused)
             continue;
         if (id == 1)                    /* "Checking hard disk": goes on by itself */
             continue;
-        if (sp == done_ptr) {
+        /* A new screen can reuse the last one's memory (title -> main menu): same
+         * pointer and same id is a dropped press, a new id is a new screen. */
+        if (sp == done_ptr && id == done_id) {
             /* Still up: the press was dropped (or a page sequence is still
              * running on the Peak/Mode/Event screen). Retry, plainly. */
             DWORD retry = id == 19 ? 6000 : 1500;
@@ -192,10 +202,15 @@ static DWORD WINAPI autonav_thread(LPVOID unused)
             continue;
         }
         done_ptr = sp;
+        done_id = id;
         done_at = now;
         switch (id) {
         case 0:                                     /* title */
             press("start:150", "title");
+            break;
+        case 2:                                     /* main menu */
+            presses("up:100", s_main, 300, "main menu");
+            press("a:150", "main menu");
             break;
         case 9:                                     /* Select Character */
             presses("right:100", s_rider, 300, "rider");
@@ -229,11 +244,49 @@ static int opt(const char *spec, const char *key)
     return p ? atoi(p + strlen(key)) : 0;
 }
 
+static char s_keys[256];
+
+static DWORD WINAPI keys_thread(LPVOID unused)
+{
+    char buf[256], *tok, *save = NULL;
+    (void)unused;
+    DWORD start_at = 0;
+    for (;;) {                                  /* Start on the title, then the main menu */
+        uint32_t sp = g_ssx3_ui_screen_ptr;
+        int ready = app_vt() == VT_FRONTEND && sp && ((MEM16(sp + 0x1C) >> 8) & 0x3F) == 5;
+        Sleep(50);
+        if (ready && g_ssx3_ui_screen_id == 2)
+            break;
+        if (ready && g_ssx3_ui_screen_id == 0 && GetTickCount() - start_at > 1500) {
+            press("start:150", "title");
+            start_at = GetTickCount();
+        }
+    }
+    Sleep(500);
+    snprintf(buf, sizeof buf, "%s", s_keys);
+    for (tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        char b[32];
+        snprintf(b, sizeof b, "%s:150", tok);
+        press(b, "keys");
+        Sleep(700);
+    }
+    fprintf(stderr, "[AUTONAV] keys done\n");
+    fflush(stderr);
+    return 0;
+}
+
 void ssx3_AutonavStart(void)
 {
     const char *e = getenv("RECOMP_AUTONAV");
+    if (e && !strncmp(e, "keys:", 5)) {
+        snprintf(s_keys, sizeof s_keys, "%s", e + 5);
+        s_t0 = GetTickCount();
+        CloseHandle(CreateThread(NULL, 0, keys_thread, NULL, 0, NULL));
+        return;
+    }
     if (!e || strncmp(e, "race", 4) != 0)
         return;
+    s_main = opt(e, "main=");
     s_rider = opt(e, "rider=");
     s_peak = opt(e, "peak=");
     s_mode = opt(e, "mode=");
