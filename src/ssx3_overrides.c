@@ -2823,3 +2823,128 @@ void sub_001EE440(void)
     }
     sub_001EE440_gen();
 }
+
+/*
+ * The game's boost cheat (2026-11-09). Every rider has a code detector at
+ * object+0xDA0 (built by sub_0013FBE0); its first word is the class's
+ * vbtable (0x00282B64 player, 0x0028257C computer) and the rider base --
+ * what the rider manager's slots point to, det+0x100 -- is at det+[[det]+4].
+ * The update runs for every rider; only player 1's is touched here. The rider code reports three button events into byte +7:
+ * 0x10 boost pressed (sub_0002CC50), 0x20 jump pressed on the ground, i.e.
+ * the prewind (sub_0002E4C0), 0x40 a handplant attempt (sub_000296F0), via
+ * sub_0013FB80. Once per frame sub_0013FD20 (this wrapper) runs the matcher
+ * sub_0013FC40 -- +4 state (0 counting, 1 on, 0xFF wrong), +5 step, +6 boost
+ * presses since the last jump: each jump must come after exactly table
+ * 0x00329070[step] boosts, (5,1,0,4,1,0,3,1,0), so the code is
+ *   5x boost, jump, boost, jump, jump, 4x boost, jump, boost, jump, jump,
+ *   3x boost, jump, boost, jump, jump
+ * with every press a separate one. A wrong count sets 0xFF until the next
+ * handplant attempt starts over. While on (+4 == 1), the update writes the
+ * rider's uberLevel +0x360 = 11, boost meter +0x364 = 1, the uber/HUD timers
+ * +0x354/+0x358/+0x35C = 60 s, boostMode +0x370 = 0 (meter pinned full) and,
+ * while boosting (+0x368 > 0), pulls the speed toward boostMaxSpeed (+0x378)
+ * by +0x380 and the velocity (+0x250) toward the board's ground-forward
+ * direction (+0x400) by +0x37C -- endless top-speed boost that holds its
+ * line. Handplant while on toggles the rider's +0x374; jump + handplant
+ * together sets 0x398550 = 8, which switches every detector off for 8 frames.
+ * A non-zero byte 0x367A98 keeps it off.
+ *
+ * For testing full rides: F7 (live.c) or RECOMP_BOOST_CHEAT=1 turns it on
+ * for player 1 and keeps it on through every event until F7 again (or the
+ * game's own off combo). The game's own code entry is logged too.
+ */
+extern void sub_0013FD20_gen(void);
+extern uint32_t ssx3_RiderObj(int i);        /* game_state.c */
+extern void ssx3_AutopilotStep(uint32_t rider);  /* autopilot.c */
+extern void xbox_FramebufferOsd(const char *text);
+
+static volatile LONG s_cheat_keep = -1;      /* -1 = not read yet, 0 off, 1 keep on */
+static volatile LONG s_cheat_off_req;
+static volatile LONG s_cheat_on_now;
+
+static int cheat_keep(void)
+{
+    if (s_cheat_keep < 0) {
+        const char *e = getenv("RECOMP_BOOST_CHEAT");
+        InterlockedCompareExchange(&s_cheat_keep, e && e[0] && e[0] != '0' ? 1 : 0, -1);
+        if (s_cheat_keep)
+            log_msg(LOG_INFO, "SETTINGS", "boost cheat on for every event (RECOMP_BOOST_CHEAT)");
+    }
+    return (int)s_cheat_keep;
+}
+
+/* F7: returns the new setting (1 on). */
+int ssx3_BoostCheatToggle(void)
+{
+    int on = !(cheat_keep() || s_cheat_on_now);
+    InterlockedExchange(&s_cheat_keep, on);
+    if (!on)
+        InterlockedExchange(&s_cheat_off_req, 1);
+    return on;
+}
+
+int ssx3_BoostCheatOn(void)
+{
+    return (int)s_cheat_on_now;
+}
+
+void sub_0013FD20(void)
+{
+    static const uint8_t code[9] = { 5, 1, 0, 4, 1, 0, 3, 1, 0 };
+    uint32_t det = g_ecx;
+    uint32_t vbt = MEM32(det), p1 = ssx3_RiderObj(0);
+    int player = p1 && vbt >= 0x00281C40u && vbt < 0x002FB500u && det + MEM32(vbt + 4) == p1;
+    uint8_t st0 = 0, step0 = 0, n0 = 0, st, step;
+    int forced = 0;
+    if (player) {
+        cheat_keep();
+        if (InterlockedExchange(&s_cheat_off_req, 0) && MEM8(det + 4) == 1) {
+            ST32(det + 4, 0);                /* state, step, count, events */
+            forced = 2;
+        } else if (s_cheat_keep && MEM8(det + 4) != 1) {
+            ST8(det + 4, 1);
+            ST8(det + 5, 0);
+            ST8(det + 6, 0);
+            forced = 1;
+        }
+        st0 = MEM8(det + 4);
+        step0 = MEM8(det + 5);
+        n0 = MEM8(det + 6);
+    }
+    sub_0013FD20_gen();
+    if (!player)
+        return;
+    ssx3_AutopilotStep(p1);
+    st = MEM8(det + 4);
+    step = MEM8(det + 5);
+    if (forced == 1 && st != 1) {
+        static int told;
+        if (!told++)
+            log_msg(LOG_WARN, "PLAY", "boost cheat: the game keeps it off here (0x367A98 = %u)",
+                    MEM8(0x00367A98u));
+    } else if (forced == 1 && !s_cheat_on_now) {
+        uint32_t base = det + MEM32(vbt + 4);
+        float meter;
+        uint32_t m = MEM32(base + 0x364);
+        memcpy(&meter, &m, 4);
+        log_msg(LOG_INFO, "PLAY", "boost cheat on for player 1 (F7 / RECOMP_BOOST_CHEAT)");
+        log_msg(LOG_DEBUG, "PLAY", "boost cheat: detector %08X, rider base %08X, uberLevel %u, "
+                "meter %.2f, boostMode %u", det, base, MEM32(base + 0x360), meter, MEM32(base + 0x370));
+    } else if (forced == 2) {
+        log_msg(LOG_INFO, "PLAY", "boost cheat off (F7)");
+    } else if (st0 == 0 && st == 1) {
+        log_msg(LOG_INFO, "PLAY", "boost cheat code entered: endless boost on");
+        xbox_FramebufferOsd("boost cheat on (code entered)");
+    } else if (st0 == 1 && st != 1) {
+        log_msg(LOG_INFO, "PLAY", "boost cheat off (jump + handplant)");
+        xbox_FramebufferOsd("boost cheat off");
+        InterlockedExchange(&s_cheat_keep, 0);
+    } else if (st0 == 0 && st == 0 && step > step0) {
+        log_msg(step >= 2 ? LOG_INFO : LOG_DEBUG, "PLAY", "boost cheat code: step %u of 9 right", step);
+    } else if (st0 == 0 && st == 0xFF) {
+        log_msg(step0 >= 2 ? LOG_INFO : LOG_DEBUG, "PLAY",
+                "boost cheat code: jump after %u boosts at step %u, wanted %u; "
+                "a handplant attempt starts it over", n0, step0 + 1, step0 < 9 ? code[step0] : 0);
+    }
+    InterlockedExchange(&s_cheat_on_now, st == 1);
+}

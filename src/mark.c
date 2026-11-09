@@ -41,6 +41,8 @@ extern const char *ssx3_ScreenNow(void);              /* ssx3_overrides.c */
 
 extern int ssx3_LiveHdTexturesOn(void);              /* src/vk/vkr_backend.c */
 extern int ssx3_LiveShadowsOn(void);
+extern int ssx3_BoostCheatOn(void);                  /* ssx3_overrides.c */
+extern int ssx3_AutopilotOn(void);                   /* autopilot.c */
 extern int ssx3_RenderInfo(uint32_t *w, uint32_t *h, uint32_t *msaa, uint64_t *tex_bytes);
 extern void ssx3_DrawDist(float *setting, float *in_use);   /* ssx3_overrides.c */
 extern float ssx3_PerfLastFps(void);                 /* perf.c */
@@ -62,6 +64,10 @@ static void mark_state(int n)
     if (dd_now < dd - 0.005f || dd_now > dd + 0.005f)
         ADD(" (now %.2fx, adapted)", dd_now);
     ADD(", rider shadows %s", ssx3_LiveShadowsOn() ? "on" : "off");
+    if (ssx3_BoostCheatOn())
+        ADD(", boost cheat on");
+    if (ssx3_AutopilotOn())
+        ADD(", autopilot on");
     if (ssx3_RenderInfo(&w, &h, &msaa, &tex))
         ADD(", MSAA %ux, %ux%u", msaa, w, h);
     ADD(" | %.1f FPS last second", ssx3_PerfLastFps());

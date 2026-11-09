@@ -7695,7 +7695,7 @@ index 94ff7b2..2a01b28 100644
  /* Report counts at exit, so a run says whether the driver ever looked. */
  void xbox_OhciReport(void);
 diff --git a/src/usb/usb_gamepad.c b/src/usb/usb_gamepad.c
-index bd00f3f..8a4137a 100644
+index bd00f3f..63f9595 100644
 --- a/src/usb/usb_gamepad.c
 +++ b/src/usb/usb_gamepad.c
 @@ -442,6 +442,55 @@ static void pad_script_compact(unsigned long t)
@@ -7798,11 +7798,63 @@ index bd00f3f..8a4137a 100644
                  npending = 0;
              }
          } else if (npending < sizeof pending - 1) {
+@@ -556,6 +591,36 @@ static void pad_script_apply(int pad, uint8_t *out)
+     }
+ }
+ 
++/* xbox_PadAuto: a title-side driver (an autopilot) sets pad n's left stick
++ * and holds analog buttons (mask as in the report, bit n = byte 4 + n) on
++ * top of whatever the host pad reports; on = 0 hands the pad back. */
++static volatile long s_auto_on[4], s_auto_lx[4], s_auto_ly[4], s_auto_ana[4];
++
++void xbox_PadAuto(int pad, int on, int lx, int ly, unsigned analog_mask)
++{
++    if (pad < 0 || pad > 3)
++        return;
++    s_auto_lx[pad] = lx < -32767 ? -32767 : lx > 32767 ? 32767 : lx;
++    s_auto_ly[pad] = ly < -32767 ? -32767 : ly > 32767 ? 32767 : ly;
++    s_auto_ana[pad] = (long)(analog_mask & 0xFF);
++    s_auto_on[pad] = on;
++}
++
++static void pad_auto_apply(int pad, uint8_t *out)
++{
++    int16_t lx, ly;
++    int j;
++    if (pad < 0 || pad > 3 || !s_auto_on[pad])
++        return;
++    lx = (int16_t)s_auto_lx[pad];
++    ly = (int16_t)s_auto_ly[pad];
++    memcpy(&out[12], &lx, 2);
++    memcpy(&out[14], &ly, 2);
++    for (j = 0; j < 8; j++)
++        if (s_auto_ana[pad] & (1L << j))
++            out[4 + j] = 0xFF;
++}
++
+ int usb_gamepad_report(int pad, uint8_t *out, int max)
+ {
+     XBOX_INPUT_STATE state;
+@@ -611,6 +676,7 @@ int usb_gamepad_report(int pad, uint8_t *out, int max)
+     if (xbox_InputGetState((DWORD)pad, &state) != 0) {
+         out[2] = synth;
+         pad_script_apply(pad, out);
++        pad_auto_apply(pad, out);
+         return 20;
+     }
+ 
+@@ -628,5 +694,6 @@ int usb_gamepad_report(int pad, uint8_t *out, int max)
+     out[18] = (uint8_t)(g->sThumbRY & 0xFF);
+     out[19] = (uint8_t)((g->sThumbRY >> 8) & 0xFF);
+     pad_script_apply(pad, out);
++    pad_auto_apply(pad, out);
+     return 20;
+ }
 diff --git a/src/usb/usb_gamepad.h b/src/usb/usb_gamepad.h
-index 18291d7..e0e9f01 100644
+index 18291d7..0a80ebb 100644
 --- a/src/usb/usb_gamepad.h
 +++ b/src/usb/usb_gamepad.h
-@@ -41,6 +41,11 @@ int usb_gamepad_report(int pad, uint8_t *out, int max);
+@@ -41,6 +41,12 @@ int usb_gamepad_report(int pad, uint8_t *out, int max);
  uint8_t usb_gamepad_address(int pad);
  int usb_gamepad_configured(int pad);
  
@@ -7810,6 +7862,7 @@ index 18291d7..e0e9f01 100644
 + * ("a", "right:120", "p2-start"), scheduled after whatever is queued. Single
 + * producer thread. Returns 0 if the queue (32 lines) is full. */
 +int xbox_PadInject(const char *line);
++void xbox_PadAuto(int pad, int on, int lx, int ly, unsigned analog_mask);
 +
  /* Up to four pads, one per Xbox controller port. Pad n is driven by host
   * XInput pad n and by pad-script steps prefixed "p<n+1>-". */

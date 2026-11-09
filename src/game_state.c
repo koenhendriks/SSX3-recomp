@@ -87,6 +87,7 @@ void ssx3_EventReady(void)
 volatile int g_ssx3_event_result;
 /* for the session summary (journal_session_end) */
 volatile int g_ssx3_events_started, g_ssx3_events_finished;
+volatile int g_ssx3_event_entries;      /* every entry, free rides and restarts too (autopilot.c) */
 static uint32_t s_left_id = 0xFFFFFFFFu;   /* an event left without a result */
 
 /* leaving in game: an event without a result was quit or restarted */
@@ -106,6 +107,7 @@ static void event_note(void)
     int again = id == s_left_id;
     g_ssx3_event_result = 0;
     s_left_id = 0xFFFFFFFFu;
+    g_ssx3_event_entries++;
     if (id < 17)
         g_ssx3_events_started++;
     {
@@ -329,13 +331,21 @@ void ssx3_GameStateStart(void)
  * +0x28 + 4*i, slot 0 = player 1 (vtable 0x00282B08 in a race), then the
  * computer riders (0x00282520); a rider's position is at +0x180. A slot
  * counts when its object has one of those two vtables. 0 outside a race. */
-int ssx3_RiderPos(int i, float out[3])
+uint32_t ssx3_RiderObj(int i)
 {
     uint32_t g = MEM32(0x00369534u), a, m, b, b0;
     if (i < 0 || i >= SSX3_RIDERS || !guest_ok(g) || !guest_ok(a = MEM32(g + 0x74))
             || !guest_ok(m = MEM32(a + 0xC)) || MEM32(m) != 0x0028216Cu
             || !guest_ok(b0 = MEM32(m + 0x28)) || !guest_ok(b = MEM32(m + 0x28 + 4u * (uint32_t)i))
             || (MEM32(b) != MEM32(b0) && MEM32(b) != 0x00282520u))
+        return 0;
+    return b;
+}
+
+int ssx3_RiderPos(int i, float out[3])
+{
+    uint32_t b = ssx3_RiderObj(i);
+    if (!b)
         return 0;
     out[0] = MEMF(b + 0x180);
     out[1] = MEMF(b + 0x184);

@@ -82,7 +82,9 @@ movies.
 it ended). Press **F12** (or click both thumbsticks) the moment you see a
 problem: the log gets a marked line with the game's state and a screenshot
 is saved next to it. **F4 / F5 / F6** switch HD textures, draw distance and
-rider shadows while playing, to see which one a glitch comes from. Details
+rider shadows while playing, to see which one a glitch comes from. **F8**
+lets player 1 ride a course on autopilot (with **F7**, the game's boost
+cheat, a race takes about 2½ minutes), to check whole courses without playing them. Details
 under [Play](#play) and in [docs/LOGGING.md](docs/LOGGING.md).
 
 Other things in the repository:
@@ -131,6 +133,8 @@ The launcher's choices are these environment variables:
 | `RECOMP_FULLSCREEN` | `0` | `1` = start in fullscreen (F11 toggles); Windows |
 | `RECOMP_CRT` | `0` | `1` = CRT TV shader (needs a resolution above 480); tune with `RECOMP_CRT_PARAMS` |
 | `RECOMP_DEBUG_MENU` | `0` | `1` = EA's quick-start menu (Start on the title screen) |
+| `RECOMP_BOOST_CHEAT` | `0` | `1` = the game's boost cheat for player 1 in every event (F7 toggles) |
+| `RECOMP_AUTOPILOT` | `0` | `1` = player 1 rides the course's AI line on its own (F8 toggles) |
 | `RECOMP_MONEY_CHEAT` | `0` | `1` = for testing: each Home key press gives player 1's rider 200,000 cash (spendable cash only; the career total earned is left alone) |
 | `RECOMP_GAME_DIR` | `game` | the folder with `default.xbe` and `data\` |
 | `RECOMP_ANISO` | `16` | anisotropic filtering (`0` = trilinear); the game's textures also get mip chains (`RECOMP_TEX_MIPS=0` turns those off) |
@@ -160,10 +164,25 @@ The launcher's choices are these environment variables:
 | F11 / Alt+Enter | Fullscreen | F3 | FPS counter |
 | F12 | Mark a problem in the log | F4 | HD textures on/off |
 | F5 | Draw distance Normal / Far / Maximum | F6 | Rider shadows on/off |
+| F7 | Boost cheat on/off | F8 | Autopilot on/off |
 
 F4-F6 change the setting until the game is closed, show it on screen and
-write it to the log. F12 and F4-F6 also work on Linux (without the
+write it to the log. F12 and F4-F8 also work on Linux (without the
 on-screen message); F3 and F11 are Windows only.
+
+**Boost cheat and autopilot (for testing whole courses).** F7 turns on the
+game's own boost cheat for player 1: a full meter that never drains, and
+while boost (X) is held the rider speeds up to boost top speed and keeps a
+straight line in the direction the board points. It does not steer. The
+cheat is in the original game: on the ground, press boost 5 times then jump,
+boost then jump, jump, boost 4 times then jump, boost then jump, jump, boost
+3 times then jump, boost then jump, jump. Jump and handplant together turn it
+off. F8 turns on an autopilot for player 1 that rides the line the computer
+riders follow, holding boost on the straights; with F7 as well a race takes
+about 2½ minutes on its own (Snow Jam and Metro City finished in tests). It
+stops at the finish line and gives the controller back in menus. Both stay
+on through every event until pressed again (`RECOMP_BOOST_CHEAT=1` /
+`RECOMP_AUTOPILOT=1` start with them on).
 
 **Controller.** An Xbox/XInput controller works without setup, rumble
 included; two controllers enable Multi Play.

@@ -665,8 +665,8 @@ static void build(void)
     yb += 40;
 
     y = (ya > yb ? ya : yb) + 8;
-    add("STATIC", "In game:  F3 FPS counter   F4 HD textures   F5 draw distance   F6 shadows   "
-        "F11 fullscreen   F12 mark a problem (or click both sticks)", 0, -1, 20, y, 820, 20, s_font);
+    add("STATIC", "In game:  F3 FPS   F4 HD textures   F5 draw distance   F6 shadows   F7 boost cheat   "
+        "F8 autopilot   F11 fullscreen   F12 mark a problem (or both sticks)", 0, -1, 20, y, 820, 20, s_font);
     y += 30;
     add("BUTTON", "Reset to defaults", BS_PUSHBUTTON | WS_TABSTOP, ID_RESET, 20, y, 130, 30, s_font);
     add("BUTTON", "Play", BS_DEFPUSHBUTTON | WS_TABSTOP, ID_PLAY, 720, y, 120, 30, s_bold);

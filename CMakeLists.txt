@@ -66,6 +66,7 @@ set(GAME_SOURCES
     src/journal.c
     src/mark.c
     src/live.c
+    src/autopilot.c
     src/perf.c
     src/recomp_manual.c
     src/ssx3_overrides.c

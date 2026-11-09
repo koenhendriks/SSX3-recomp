@@ -29,6 +29,13 @@ Controls
   screen and written to the log; the next start uses the launcher's again):
     F4 HD textures on/off, F5 draw distance Normal / Far / Maximum,
     F6 rider shadows on/off.
+  For testing whole courses (kept on through every event until pressed again):
+    F7 the game's boost cheat: a full boost meter that never drains; while
+       boost is held the rider goes at top speed in a straight line (you
+       still steer).
+    F8 autopilot: player 1 rides the course on its own, along the line the
+       computer riders take. With F7 as well a race takes about 2.5 minutes.
+       It stops at the finish line.
 
 HD textures
   The hd-textures folder holds Bl4ckH4nd's HD texture pack for SSX 3

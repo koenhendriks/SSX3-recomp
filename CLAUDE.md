@@ -1049,6 +1049,20 @@ All env defaults are set in `src/main.c` only when unset, so a run can override 
   tools\package.ps1 -> dist\SSX3-recomp(.zip): both exes, LICENSE, keys
   example, docs/PLAYER-README.txt. Probes: work\probe\launcher_shot.ps1
   (PrintWindow capture, -Play posts the Play button), launcher_play.ps1.
+- BOOST CHEAT AND AUTOPILOT (2026-11-09): the game's own boost cheat (code
+  detector at rider object +0xDA0, matcher sub_0013FC40, table 0x00329070
+  = 5,1,0,4,1,0,3,1,0 boosts before each jump; update sub_0013FD20, wrapped:
+  F7 / RECOMP_BOOST_CHEAT=1 sets player 1's detector on and logs the game's
+  own code entry) gives uberLevel 11 (rider base +0x360), meter pinned and,
+  while boosting, top speed along the board's ground-forward -- no steering.
+  0x367A98 = network game (keeps it off). Autopilot (src/autopilot.c, F8 /
+  RECOMP_AUTOPILOT=1): steers player 1 at the computer riders' steer target
+  from the rider base's AI-line fields (+0x4F0 nearest, +0x500 look-ahead,
+  +0x528 off the line, +0x530 to the finish; base = rider manager slot
+  pointer = detector + [[det]+4]) through the toolkit's xbox_PadAuto (left
+  stick + X on top of the pad report); stick sign -1. Snow Jam and Metro City
+  finish in ~150 s with both on. Probe: work\probe\autorun.ps1 -Event N -Extra
+  "RECOMP_BOOST_CHEAT=1".
 - XEMU REFERENCE (2026-10-15): `tools\xemu.ps1` (skill: .claude/skills/xemu)
   boots a separate, muted xemu instance with the ISO (own config + HDD copy
   in work\xemu\, QMP on 127.0.0.1:4455), presses pad buttons by posting key
