@@ -21,8 +21,26 @@ tree). Without a terminal, its output goes to `logs/` beside the game folder.
 
 Deps: `tools/linux/install_deps.sh` in the toolkit (SDL2, libepoxy, OpenSSL),
 plus the Vulkan headers and glslc for the renderer (Arch: `vulkan-headers`,
-`shaderc`). Tested on aarch64 (Asahi) with GCC 16 and on x86-64 (Arch,
-GCC, NVIDIA RTX 4080 SUPER).
+`shaderc`; Fedora: `vulkan-headers vulkan-loader-devel glslc`). Tested on
+aarch64 (Asahi) with GCC 16, on x86-64 (Arch, GCC, NVIDIA RTX 4080 SUPER),
+and on x86-64 Fedora 44 (KDE Plasma, Wayland, GCC 16, AMD RX 6800 XT on
+RADV), where boot, menus, races, Conquer the Mountain and audio work.
+
+Fedora 44 ships SDL2 as `sdl2-compat` on top of SDL3, and the game runs on it
+as is. Everything for the game and the launcher:
+
+```bash
+sudo dnf install gcc gcc-c++ cmake ninja-build git git-lfs python3 sdl2-compat-devel \
+    SDL2_ttf-devel fontconfig-devel libepoxy-devel openssl-devel \
+    vulkan-headers vulkan-loader-devel glslc
+```
+
+The HD texture pack (`hd-textures/`) is stored with Git LFS. Without git-lfs a clone holds 131-byte pointer
+files there, and every HD texture fails with `not a DX10 DDS` in the log. After installing it, in the clone:
+`git lfs install --local --skip-repo && git lfs pull --include "hd-textures/**"` (`--skip-repo` leaves git hooks
+alone).
+
+Fedora's ffmpeg has no libx264, which `RECOMP_RECORD` uses.
 
 ## Status x86-64 (2026-10-20)
 
