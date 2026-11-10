@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>SSX 3</string>
+  <key>CFBundleDisplayName</key><string>SSX 3</string>
+  <key>CFBundleIdentifier</key><string>io.github.zangetsu-sama.ssx3recomp</string>
+  <key>CFBundleExecutable</key><string>launcher</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VER@</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <!-- No App Nap: a covered or minimised window must not slow the game's
+       timers (the Windows build opts out of power throttling for the same reason). -->
+  <key>NSAppSleepDisabled</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+</dict>
+</plist>

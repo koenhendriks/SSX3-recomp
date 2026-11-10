@@ -30,7 +30,14 @@
 #include <pthread.h>
 #if !defined(__EMSCRIPTEN__)
 #include <execinfo.h>
+#endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+/* Darwin: no gettid/tgkill and no /proc; walk the task's Mach threads. */
+#define HOST_TID() ((long)pthread_mach_thread_np(pthread_self()))
+#elif !defined(__EMSCRIPTEN__)
 #include <sys/syscall.h>
+#define HOST_TID() ((long)syscall(SYS_gettid))
 #endif
 
 #include "recomp/gen/recomp_types.h"
@@ -53,7 +60,7 @@ static void dump_handler(int sig)
 
     (void)sig;
     fprintf(stderr, "[THREAD %ld] eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X esi=%08X edi=%08X\n",
-            (long)syscall(SYS_gettid), g_eax, g_ecx, g_edx, g_ebx, g_esp, g_esi, g_edi);
+            HOST_TID(), g_eax, g_ecx, g_edx, g_ebx, g_esp, g_esi, g_edi);
     print_guest_stack();
     n = backtrace(bt, 48);
     backtrace_symbols_fd(bt, n, 2);
@@ -64,30 +71,67 @@ static volatile sig_atomic_t s_dump_req;
 
 static void usr1_handler(int sig) { (void)sig; s_dump_req = 1; }
 
+static void dump_one(long tid, void (*kick)(long))
+{
+    int waited = 0;
+
+    s_dump_done = 0;
+    kick(tid);
+    while (!s_dump_done && waited++ < 100)
+        usleep(10000);
+    if (!s_dump_done)
+        fprintf(stderr, "[THREAD %ld] no response (blocked signals?)\n", tid);
+}
+
+#if defined(__APPLE__)
+static void kick_mach(long tid)
+{
+    pthread_t pt = pthread_from_mach_thread_np((mach_port_t)tid);
+    if (pt)
+        pthread_kill(pt, SIGUSR2);
+}
+#else
+static void kick_tgkill(long tid)
+{
+    syscall(SYS_tgkill, getpid(), tid, SIGUSR2);
+}
+#endif
+
 static void dump_all(const char *why)
 {
-    long self = (long)syscall(SYS_gettid);
-    DIR *d;
-    struct dirent *e;
+    long self = HOST_TID();
     extern void ssx3_StreamDump(void);
 
     fprintf(stderr, "[THREADS] ---- dump (%s) ----\n", why);
-    d = opendir("/proc/self/task");
-    while (d && (e = readdir(d))) {
-        long tid = atol(e->d_name);
-        int waited = 0;
+#if defined(__APPLE__)
+    {
+        thread_act_array_t list;
+        mach_msg_type_number_t n = 0, i;
 
-        if (tid <= 0 || tid == self)
-            continue;
-        s_dump_done = 0;
-        syscall(SYS_tgkill, getpid(), tid, SIGUSR2);
-        while (!s_dump_done && waited++ < 100)
-            usleep(10000);
-        if (!s_dump_done)
-            fprintf(stderr, "[THREAD %ld] no response (blocked signals?)\n", tid);
+        if (task_threads(mach_task_self(), &list, &n) == KERN_SUCCESS) {
+            for (i = 0; i < n; i++) {
+                if ((long)list[i] != self && pthread_from_mach_thread_np(list[i]))
+                    dump_one((long)list[i], kick_mach);
+                mach_port_deallocate(mach_task_self(), list[i]);
+            }
+            vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof(*list));
+        }
     }
-    if (d)
-        closedir(d);
+#else
+    {
+        DIR *d = opendir("/proc/self/task");
+        struct dirent *e;
+
+        while (d && (e = readdir(d))) {
+            long tid = atol(e->d_name);
+            if (tid <= 0 || tid == self)
+                continue;
+            dump_one(tid, kick_tgkill);
+        }
+        if (d)
+            closedir(d);
+    }
+#endif
     ssx3_StreamDump();
     fprintf(stderr, "[THREADS] ---- end ----\n");
     fflush(stderr);

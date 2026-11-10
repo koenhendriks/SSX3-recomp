@@ -988,7 +988,14 @@ typedef struct { HudBox b; float shift, pending, from; int pend_n; unsigned chan
 #define HUD_FLICKER   90               /* a change undone within this many frames is a flicker */
 
 static HudBox   s_hud_boxes[HUD_MAX_BOXES];    /* this frame's pieces */
+static float    s_hud_box_shift[HUD_MAX_BOXES];/* ... and the shift each was drawn with */
 static int      s_hud_nboxes;
+/* This frame's wide pieces (panel bodies, over HUD_PIECE_MAX) and their
+ * shifts: text drawn over one goes with it on its first frame. */
+#define HUD_MAX_WIDE 64
+static HudBox   s_hud_wide[HUD_MAX_WIDE];
+static float    s_hud_wide_shift[HUD_MAX_WIDE];
+static int      s_hud_nwide;
 static HudGroup s_hud_groups[HUD_MAX_BOXES];   /* last frame's elements */
 static int      s_hud_ngroups;
 static int      s_hud_trace = -1, s_hud_trace_frame, s_hud_order;
@@ -1214,6 +1221,7 @@ static void hud_build_groups(void)
                     s_hud_groups[i].b.y1, s_hud_groups[i].shift);
     }
     s_hud_nboxes = 0;
+    s_hud_nwide = 0;
 }
 
 static float hud_traced(const HudBox *b, uint32_t n, float shift, const char *why)
@@ -1221,6 +1229,14 @@ static float hud_traced(const HudBox *b, uint32_t n, float shift, const char *wh
     if (s_hud_trace_frame)
         fprintf(stderr, "[HUD] #%d box %.0f-%.0f x %.0f-%.0f n %u shift %+.3f %s\n",
                 s_hud_order, b->x0, b->x1, b->y0, b->y1, n, shift, why);
+    return shift;
+}
+
+/* The shift the piece just recorded (the last of s_hud_boxes) is drawn with. */
+static float hud_set_shift(float shift)
+{
+    if (s_hud_nboxes > 0)
+        s_hud_box_shift[s_hud_nboxes - 1] = shift;
     return shift;
 }
 
@@ -1245,10 +1261,18 @@ static float hud_shift(const Nv2aVshOutput *v, uint32_t n)
     s_hud_order++;
     if (b.x1 - b.x0 > gw * 0.9f)
         return hud_traced(&b, n, 0.0f, "full width");
-    if (b.x1 - b.x0 > gw * HUD_PIECE_MAX)
-        return hud_traced(&b, n, menu ? 0.0f : hud_place(&b), "wide: alone, by its centre");
-    if (s_hud_nboxes < HUD_MAX_BOXES)
+    if (b.x1 - b.x0 > gw * HUD_PIECE_MAX) {
+        float sh = menu ? 0.0f : hud_place(&b);
+        if (s_hud_nwide < HUD_MAX_WIDE) {
+            s_hud_wide[s_hud_nwide] = b;
+            s_hud_wide_shift[s_hud_nwide++] = sh;
+        }
+        return hud_traced(&b, n, sh, "wide: alone, by its centre");
+    }
+    if (s_hud_nboxes < HUD_MAX_BOXES) {
+        s_hud_box_shift[s_hud_nboxes] = 0.0f;
         s_hud_boxes[s_hud_nboxes++] = b;
+    }
     if (menu)
         return hud_traced(&b, n, 0.0f, "menu up: recorded, not moved");
     {
@@ -1263,9 +1287,31 @@ static float hud_shift(const Nv2aVshOutput *v, uint32_t n)
             }
         }
         if (best >= 0)
-            return hud_traced(&b, n, s_hud_groups[best].shift, "in last frame's element");
+            return hud_set_shift(hud_traced(&b, n, s_hud_groups[best].shift, "in last frame's element"));
     }
-    return hud_traced(&b, n, hud_place(&b), "new: by its own centre");
+    {
+        /* A new element's pieces arrive one draw at a time and the element
+         * is only known at the flip. Placed each by its own centre, a text
+         * across a third's line came apart for its first frame -- the race
+         * HUD on the first frame after the briefing ("6 48 60", "SUPE R"),
+         * the briefing title while the panel closed ("R&B -    Slopestyle").
+         * A piece that touches one already drawn this frame, or lies on a
+         * wide panel drawn this frame, goes with it. RECOMP_HUD_SAMEFRAME=0:
+         * the old rule (A/B). */
+        static int same = -1;
+        int k;
+        if (same < 0) { const char *e = getenv("RECOMP_HUD_SAMEFRAME"); same = !(e && *e == '0'); }
+        for (k = same ? s_hud_nboxes - 2 : -1; k >= 0; k--)
+            if (hud_touch(&b, &s_hud_boxes[k]))
+                return hud_set_shift(hud_traced(&b, n, s_hud_box_shift[k], "new: with a piece of this frame"));
+        for (k = same ? s_hud_nwide - 1 : -1; k >= 0; k--) {
+            const HudBox *w = &s_hud_wide[k];
+            if (b.x0 >= w->x0 - HUD_TOUCH_PX && b.x1 <= w->x1 + HUD_TOUCH_PX
+                && b.y0 >= w->y0 - HUD_TOUCH_PX && b.y1 <= w->y1 + HUD_TOUCH_PX)
+                return hud_set_shift(hud_traced(&b, n, s_hud_wide_shift[k], "new: on a wide panel of this frame"));
+        }
+    }
+    return hud_set_shift(hud_traced(&b, n, hud_place(&b), "new: by its own centre"));
 }
 
 /* Vertex 0 of a GPU-path draw through the CPU interpreter (the program and

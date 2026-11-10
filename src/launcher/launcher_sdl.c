@@ -6,9 +6,12 @@
  * indices) and the same RECOMP_* hand-off as the Windows launcher, so an ini
  * carries over either way. Differences, all from what the Linux build of the
  * game can do:
- *  - no Fullscreen, FPS counter or Audio output rows: the SDL game window
- *    reads neither RECOMP_FULLSCREEN nor RECOMP_FPS_OVERLAY, and 5.1 output
- *    is XAudio2 only. Their keys in the ini are kept as they are.
+ *  - no Audio output row: 5.1 output is XAudio2 only (its ini key is kept).
+ *    Fullscreen, FPS counter, motion blur and the modern camera are here as
+ *    on Windows (the SDL game window handles F11 / F3 too).
+ *  - macOS (SSX3.app): launcher.ini, keys.ini, logs/ and the F12 marks are in
+ *    ~/Library/Application Support/SSX3, the game's working folder, instead
+ *    of inside the app bundle.
  *  - "Auto" resolution is resolved here from the desktop the launcher is on;
  *    main.c asks the monitor only on Windows. "Auto" aspect ratio is passed
  *    on as "auto": the renderer follows the game window's shape.
@@ -26,7 +29,14 @@
 #endif
 #include <SDL.h>
 #include <SDL_ttf.h>
+#if defined(__APPLE__)
+/* macOS: system fonts by path, the folder picker through AppleScript,
+ * Finder to open the logs. */
+#include <mach-o/dyld.h>
+#include <CoreFoundation/CoreFoundation.h>
+#else
 #include <fontconfig/fontconfig.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -45,9 +55,25 @@ extern char **environ;
 
 #define GAME_EXE   "ssx3_recomp"
 #define TITLE_ID   0x4541003Cu      /* SSX 3, PAL: what this build was made from */
-#define WIN_W      560
+#define WIN_MIN_W  560
+#define WIN_MIN_H  320
+#define FOOTER_H   56         /* the pinned row of buttons at the bottom */
+/* The window is resizable: the form takes the width, scrolls when taller
+ * than the window (wheel / trackpad), and its buttons stay pinned below. */
+static int s_win_w = WIN_MIN_W, s_win_h = 760, s_scroll, s_content_h;
+#define WIN_W      s_win_w
 
 typedef struct { const char *label, *value; } Choice;
+
+/* The console language the game is told (RECOMP_LANGUAGE): the PAL SSX 3
+ * has English, French, German and Spanish. "Auto" = the system's. */
+static const Choice k_lang[] = {
+    {"Auto (system language)", ""},
+    {"English", "en"},
+    {"Fran\xc3\xa7" "ais", "fr"},
+    {"Deutsch", "de"},
+    {"Espa\xc3\xb1" "ol", "es"},
+};
 
 static const Choice k_res[] = {
     {"Auto (your monitor's height)", ""},
@@ -182,6 +208,7 @@ static void ini_save(void)
 static char s_path[PATH_MAX];
 static int s_res, s_aspect, s_msaa, s_aniso, s_drawdist, s_shadows;
 static int s_crt, s_hdtex, s_hudedges, s_skipintro, s_fastboot, s_debugmenu, s_moneycheat;
+static int s_fullscreen, s_fps, s_mblur, s_cam, s_lang;
 static int s_loglevel = 2;
 static int s_game_ok;
 static char s_status[512];
@@ -299,6 +326,12 @@ static void load_settings(void)
     s_drawdist = ini_int("draw_distance", 1);
     s_shadows = ini_int("shadows", 1);
     s_crt = ini_int("crt", 0);
+    s_fullscreen = ini_int("fullscreen", 0);
+    s_lang = ini_int("language", 0);
+    if (s_lang < 0 || s_lang >= (int)N(k_lang)) s_lang = 0;
+    s_fps = ini_int("fps_counter", 0);
+    s_mblur = ini_int("motion_blur", 0);
+    s_cam = ini_int("modern_camera", 0);
     s_hdtex = ini_int("hd_textures", 1);
     s_hudedges = ini_int("hud_edges", 1);
     s_skipintro = ini_int("skip_intro", 1);
@@ -319,6 +352,11 @@ static void save_settings(void)
     ini_set_int("draw_distance", s_drawdist);
     ini_set_int("shadows", s_shadows);
     ini_set_int("crt", s_crt);
+    ini_set_int("fullscreen", s_fullscreen);
+    ini_set_int("language", s_lang);
+    ini_set_int("fps_counter", s_fps);
+    ini_set_int("motion_blur", s_mblur);
+    ini_set_int("modern_camera", s_cam);
     ini_set_int("hd_textures", s_hdtex);
     ini_set_int("hud_edges", s_hudedges);
     ini_set_int("skip_intro", s_skipintro);
@@ -340,6 +378,11 @@ static void reset_settings(void)
     s_drawdist = 1;
     s_shadows = 1;
     s_crt = 0;
+    s_fullscreen = 0;
+    s_lang = 0;
+    s_fps = 0;
+    s_mblur = 0;
+    s_cam = 0;
     s_hdtex = 1;
     s_hudedges = 1;
     s_skipintro = 1;
@@ -399,6 +442,21 @@ static void browse(void)
     int rc;
 
     snprintf(start, sizeof start, "%s/", *s_path ? s_path : getenv("HOME") ? getenv("HOME") : "/");
+#if defined(__APPLE__)
+    {
+        char script[PATH_MAX + 256];
+        snprintf(script, sizeof script,
+                 "POSIX path of (choose folder with prompt \"Choose the SSX 3 game folder "
+                 "(with default.xbe and data)\" default location (POSIX file \"%s\"))", start);
+        char *osa[] = { "osascript", "-e", script, NULL };
+        rc = run_capture(osa, out, sizeof out);
+        {
+            size_t l = strlen(out);
+            while (l > 1 && out[l - 1] == '/')
+                out[--l] = 0;
+        }
+    }
+#else
     {
         char *zen[] = { "zenity", "--file-selection", "--directory",
                         "--title=Choose the SSX 3 game folder (with default.xbe and data)",
@@ -410,6 +468,7 @@ static void browse(void)
                        "--title", "Choose the SSX 3 game folder (with default.xbe and data)", NULL };
         rc = run_capture(kd, out, sizeof out);
     }
+#endif
     if (rc < 0) {
         snprintf(s_status, sizeof s_status,
                  "No folder dialog found (install zenity or kdialog). Type the path in the box above.");
@@ -430,10 +489,96 @@ static void browse(void)
     update_status();
 }
 
+#if defined(__APPLE__)
+static char s_data[PATH_MAX];   /* ~/Library/Application Support/SSX3, or "" */
+
+static int copy_file(const char *from, const char *to)
+{
+    char buf[8192];
+    size_t n;
+    FILE *in = fopen(from, "rb"), *out;
+    if (!in)
+        return 0;
+    out = fopen(to, "wb");
+    if (!out) { fclose(in); return 0; }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    return 1;
+}
+
+static int data_dir_init(void)
+{
+    const char *home = getenv("HOME");
+    char lib[PATH_MAX], ex_from[PATH_MAX + 64], ex_to[PATH_MAX + 32];
+    if (!home || !*home)
+        return 0;
+    snprintf(lib, sizeof lib, "%s/Library/Application Support", home);
+    snprintf(s_data, sizeof s_data, "%s/SSX3", lib);
+    mkdir(lib, 0755);
+    if (mkdir(s_data, 0755) != 0 && !dir_exists(s_data)) {
+        s_data[0] = 0;
+        return 0;
+    }
+    /* keys.example.ini beside keys.ini, as in the Windows release folder */
+    snprintf(ex_from, sizeof ex_from, "%s/../Resources/keys.example.ini", s_dir);
+    snprintf(ex_to, sizeof ex_to, "%s/keys.example.ini", s_data);
+    if (!file_exists(ex_to))
+        copy_file(ex_from, ex_to);
+    return 1;
+}
+#endif
+
+/* The system's language as one the game has (en/fr/de/es), English
+ * otherwise. macOS: the first preferred language (an app started from the
+ * Finder has no LANG); elsewhere LC_ALL / LC_MESSAGES / LANG. */
+static const char *system_language(void)
+{
+    static const char *have[] = {"en", "fr", "de", "es"};
+    char code[3] = {0};
+    int i;
+#if defined(__APPLE__)
+    {
+        CFArrayRef langs = CFLocaleCopyPreferredLanguages();
+        if (langs && CFArrayGetCount(langs) > 0) {
+            char buf[32];
+            CFStringRef l = (CFStringRef)CFArrayGetValueAtIndex(langs, 0);
+            if (CFStringGetCString(l, buf, sizeof buf, kCFStringEncodingUTF8)) {
+                code[0] = (char)(buf[0] | 0x20);
+                code[1] = (char)(buf[1] | 0x20);
+            }
+        }
+        if (langs)
+            CFRelease(langs);
+    }
+#else
+    {
+        const char *e = getenv("LC_ALL");
+        if (!e || !*e) e = getenv("LC_MESSAGES");
+        if (!e || !*e) e = getenv("LANG");
+        if (e && e[0] && e[1]) {
+            code[0] = (char)(e[0] | 0x20);
+            code[1] = (char)(e[1] | 0x20);
+        }
+    }
+#endif
+    for (i = 0; i < 4; i++)
+        if (!strcmp(code, have[i]))
+            return have[i];
+    return "en";
+}
+
 /* The game writes nothing but stdout/stderr; logs/ beside the game folder is
  * where the Windows game puts its log when it has no console. */
 static void logs_dir(char *out, size_t n)
 {
+#if defined(__APPLE__)
+    if (s_data[0]) {                     /* with keys.ini and the F12 marks */
+        snprintf(out, n, "%s/logs", s_data);
+        return;
+    }
+#endif
     char base[PATH_MAX], *slash;
     if (!*s_path || !realpath(s_path, base))
         snprintf(base, sizeof base, "%s/x", s_dir);
@@ -579,6 +724,11 @@ static void play(void)
     env_set("RECOMP_DRAW_DIST", pick(k_drawdist, N(k_drawdist), s_drawdist));
     env_set("RECOMP_SHADOW_RES", pick(k_shadows, N(k_shadows), s_shadows));
     env_set("RECOMP_CRT", s_crt ? "1" : NULL);
+    env_set("RECOMP_FULLSCREEN", s_fullscreen ? "1" : NULL);
+    env_set("RECOMP_LANGUAGE", s_lang > 0 ? k_lang[s_lang].value : system_language());
+    env_set("RECOMP_FPS_OVERLAY", s_fps ? "1" : NULL);
+    env_set("RECOMP_MBLUR", s_mblur ? "0.5" : NULL);
+    env_set("RECOMP_CAM", s_cam ? "1" : NULL);
     env_set("RECOMP_HDTEX", s_hdtex ? NULL : "0");
     env_set("RECOMP_HUD_EDGES", s_hudedges ? NULL : "0");
     env_set("RECOMP_SKIP_INTRO", s_skipintro ? "1" : "0");
@@ -602,6 +752,12 @@ static void play(void)
         if (!dir_exists(here) && dir_exists(up))
             snprintf(cwd, sizeof cwd, "%s/..", s_dir);
     }
+#if defined(__APPLE__)
+    /* SSX3.app: the data folder (keys.ini, logs/, F12 marks). The game finds
+     * the HD textures in the bundle's Resources by itself. */
+    if (s_data[0])
+        snprintf(cwd, sizeof cwd, "%s", s_data);
+#endif
 
     if (!isatty(STDERR_FILENO)) {
         char logs[PATH_MAX], path[PATH_MAX + 64];
@@ -654,7 +810,11 @@ static void open_logs(void)
         return;
     }
     {
+#if defined(__APPLE__)
+        char *argv[] = { "open", logs, NULL };
+#else
         char *argv[] = { "xdg-open", logs, NULL };
+#endif
         spawn_detached(argv);
     }
 }
@@ -758,7 +918,7 @@ static void check_mark(int x, int y, int size, SDL_Color c)
 /* ---- widgets: immediate mode --------------------------------------------- */
 
 enum {
-    W_NONE, W_PATH, W_RES, W_ASPECT, W_MSAA, W_ANISO, W_DRAWDIST, W_SHADOWS, W_LOGLEVEL
+    W_NONE, W_PATH, W_RES, W_ASPECT, W_MSAA, W_ANISO, W_DRAWDIST, W_SHADOWS, W_LOGLEVEL, W_LANG
 };
 
 static int s_mx = -1, s_my = -1, s_click;       /* logical mouse, one click per frame */
@@ -895,15 +1055,27 @@ static int draw_form(int *want_play)
     const int L = 20, CX = 160, CW = 300, RH = 26;
     static char auto_res[96];
     static Choice res[N(k_res)];
-    int y = 14, i;
+    int y = 14 - s_scroll, i, footer_y = s_win_h - FOOTER_H;
+    int saved_click, saved_mx, saved_my;
     SDL_DisplayMode dm;
 
     combo_click();
     color(C_BG);
     SDL_RenderClear(s_ren);
+    /* The pointer over the pinned footer must not reach the content
+     * scrolled underneath it. */
+    saved_click = s_click; saved_mx = s_mx; saved_my = s_my;
+    if (s_my >= footer_y && s_open == W_NONE) {
+        s_click = 0;
+        s_mx = s_my = -1;
+    }
 
     text(s_title, "SSX 3", L, y, C_TEXT, 0, 0);
+#if defined(__APPLE__)
+    text(s_font, "static recompilation for macOS   " SSX3_BUILD_COMMIT, L + text_w(s_title, "SSX 3") + 12,
+#else
     text(s_font, "static recompilation for Linux   " SSX3_BUILD_COMMIT, L + text_w(s_title, "SSX 3") + 12,
+#endif
          y + font_h(s_title) - font_h(s_font) - 4, C_DIM, 0, 0);
     y += font_h(s_title) + 14;
 
@@ -947,10 +1119,21 @@ static int draw_form(int *want_play)
     checkbox(L, y, 440, "HD textures (Bl4ckH4nd's HD texture pack)", &s_hdtex);
     y += 24;
     checkbox(L, y, 440, "HUD at the screen edges (widescreen)", &s_hudedges);
+    y += 24;
+    checkbox(L, y, 440, "Fullscreen (F11 toggles in game)", &s_fullscreen);
+    y += 24;
+    checkbox(L, y, 440, "FPS counter (F3 toggles in game)", &s_fps);
+    y += 24;
+    checkbox(L, y, 440, "Motion blur (riders stay sharp)", &s_mblur);
+    y += 24;
+    checkbox(L, y, 480, "Modern camera (smoother follow, speed FOV, shake)", &s_cam);
     y += 34;
 
     heading("Game", L, y);
     y += 26;
+    row_label("Language", L, y, RH);
+    combo(W_LANG, CX, y, CW, RH, k_lang, N(k_lang), &s_lang);
+    y += RH + 8;
     checkbox(L, y, 440, "Skip the intro movies", &s_skipintro);
     y += 24;
     checkbox(L, y, 480, "Fast boot (shorter title and hard-disk-check waits)", &s_fastboot);
@@ -973,22 +1156,56 @@ static int draw_form(int *want_play)
                       "The keyboard always works as player 1 (keys.ini).",
               L, y, C_DIM, 0, WIN_W - 2 * L);
     y += 14;
+    s_content_h = y + s_scroll;          /* the form's own height, unscrolled */
 
+    /* Scroll position indicator when the form is taller than its area. */
+    if (s_content_h > footer_y) {
+        int track = footer_y - 8, bar = track * footer_y / s_content_h;
+        int top = 4 + (track - bar) * s_scroll / (s_content_h - footer_y > 0 ? s_content_h - footer_y : 1);
+        SDL_Rect r = {S(WIN_W - 6), S(top), S(3), S(bar)};
+        color(C_DIM);
+        SDL_RenderFillRect(s_ren, &r);
+    }
+
+    /* The pinned footer. */
+    s_click = saved_click; s_mx = saved_mx; s_my = saved_my;
+    {
+        SDL_Rect r = {0, S(footer_y), S(WIN_W), S(FOOTER_H)};
+        color(C_BG);
+        SDL_RenderFillRect(s_ren, &r);
+        r.h = S(1) > 0 ? S(1) : 1;
+        color(C_DIM);
+        SDL_RenderFillRect(s_ren, &r);
+    }
+    y = footer_y + (FOOTER_H - 32) / 2;
     if (button(L, y, 110, 32, "Open logs", 0, 1))
         open_logs();
     if (button(L + 120, y, 150, 32, "Reset to defaults", 0, 1))
         reset_settings();
     if (button(WIN_W - L - 130, y, 130, 32, "Play", 1, s_game_ok) && s_game_ok)
         *want_play = 1;
-    y += 32 + 18;
 
     combo_list();
     s_click = 0;
-    return y;
+    return s_content_h + FOOTER_H;
 }
 
 /* ---- fonts --------------------------------------------------------------- */
 
+#if defined(__APPLE__)
+static TTF_Font *open_font(const char *pattern, int pt)
+{
+    /* Helvetica.ttc: face 0 regular, face 1 bold. Arial as a fallback. */
+    int bold = strstr(pattern, "bold") != NULL, size = (int)(pt * s_scale + 0.5f);
+    TTF_Font *f = TTF_OpenFontIndex("/System/Library/Fonts/Helvetica.ttc", size, bold ? 1 : 0);
+    if (!f)
+        f = TTF_OpenFont(bold ? "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+                              : "/System/Library/Fonts/Supplemental/Arial.ttf", size);
+    if (!f)
+        f = TTF_OpenFont("/System/Library/Fonts/Geneva.ttf", size);
+    return f;
+}
+#else
 static TTF_Font *open_font(const char *pattern, int pt)
 {
     FcPattern *p = FcNameParse((const FcChar8 *)pattern), *m;
@@ -1006,6 +1223,7 @@ static TTF_Font *open_font(const char *pattern, int pt)
     FcPatternDestroy(p);
     return f;
 }
+#endif
 
 static int make_fonts(void)
 {
@@ -1044,11 +1262,34 @@ int main(int argc, char **argv)
     int running = 1, height = 760;
     (void)argc;
 
+#if defined(__APPLE__)
+    {
+        char exe[PATH_MAX];
+        uint32_t sz = sizeof exe;
+        if (_NSGetExecutablePath(exe, &sz) != 0 || !realpath(exe, s_dir))
+            if (!realpath(argv[0], s_dir))
+                snprintf(s_dir, sizeof s_dir, ".");
+    }
+    if (0)
+#else
     if (!realpath("/proc/self/exe", s_dir) && !realpath(argv[0], s_dir))
+#endif
         snprintf(s_dir, sizeof s_dir, ".");
     if ((slash = strrchr(s_dir, '/')) != NULL)
         *slash = 0;
     snprintf(s_ini, sizeof s_ini, "%s/launcher.ini", s_dir);
+#if defined(__APPLE__)
+    /* SSX3.app: settings, keys.ini, logs and F12 marks live in
+     * ~/Library/Application Support/SSX3, not inside the (signed, replaced
+     * on update) app bundle. */
+    if (data_dir_init()) {
+        char old_ini[PATH_MAX + 16];
+        snprintf(old_ini, sizeof old_ini, "%s", s_ini);
+        snprintf(s_ini, sizeof s_ini, "%s/launcher.ini", s_data);
+        if (!file_exists(s_ini) && file_exists(old_ini))
+            copy_file(old_ini, s_ini);     /* settings from an older build */
+    }
+#endif
 
     if (!getenv("SDL_VIDEO_WAYLAND_WMCLASS") && !getenv("SDL_VIDEO_X11_WMCLASS")) {
         setenv("SDL_VIDEO_WAYLAND_WMCLASS", "ssx3-launcher", 1);
@@ -1059,12 +1300,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "launcher: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+#if defined(__APPLE__)
+    if (TTF_Init() != 0) {
+#else
     if (TTF_Init() != 0 || !FcInit()) {
+#endif
         fprintf(stderr, "launcher: font setup failed: %s\n", TTF_GetError());
         return 1;
     }
     s_win = SDL_CreateWindow("SSX 3 Launcher", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             WIN_W, height, SDL_WINDOW_HIDDEN | SDL_WINDOW_ALLOW_HIGHDPI);
+                             WIN_W, height,
+                             SDL_WINDOW_HIDDEN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
     s_ren = s_win ? SDL_CreateRenderer(s_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
     if (!s_ren && s_win)
         s_ren = SDL_CreateRenderer(s_win, -1, SDL_RENDERER_SOFTWARE);
@@ -1084,9 +1330,17 @@ int main(int argc, char **argv)
     load_settings();
     update_pads();
     {
-        /* Size the window to the form: one layout pass while hidden. */
+        /* Size the window to the form (one layout pass while hidden), but
+         * no taller than the display: the form scrolls inside it. */
         int dummy = 0;
+        SDL_Rect usable;
         height = draw_form(&dummy);
+        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && height > usable.h - 40)
+            height = usable.h - 40;
+        if (height < WIN_MIN_H)
+            height = WIN_MIN_H;
+        s_win_h = height;
+        SDL_SetWindowMinimumSize(s_win, WIN_MIN_W, WIN_MIN_H);
         SDL_SetWindowSize(s_win, WIN_W, height);
         SDL_SetWindowPosition(s_win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         SDL_ShowWindow(s_win);
@@ -1107,6 +1361,23 @@ int main(int argc, char **argv)
                     running = 0;
                 else if (e.window.event == SDL_WINDOWEVENT_LEAVE)
                     s_mx = s_my = -1;
+                else if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    SDL_GetWindowSize(s_win, &s_win_w, &s_win_h);
+                    if (s_win_w < WIN_MIN_W) s_win_w = WIN_MIN_W;
+                    s_open = W_NONE;    /* a combo list placed for the old size */
+                }
+                break;
+            case SDL_MOUSEWHEEL:
+                if (s_open == W_NONE) {
+                    int dy = e.wheel.y;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+                    if (e.wheel.preciseY != 0.0f)
+                        dy = (int)(e.wheel.preciseY * 3.0f + (e.wheel.preciseY > 0 ? 0.5f : -0.5f));
+#endif
+                    if (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+                        dy = -dy;
+                    s_scroll -= dy * 12;
+                }
                 break;
             case SDL_MOUSEMOTION:
                 s_mx = e.motion.x;
@@ -1142,7 +1413,7 @@ int main(int argc, char **argv)
                         s_path[n - 1] = 0;
                     update_status();
                 } else if (s_focus == W_PATH && e.key.keysym.sym == SDLK_v
-                           && (e.key.keysym.mod & KMOD_CTRL)) {
+                           && (e.key.keysym.mod & (KMOD_CTRL | KMOD_GUI))) {
                     char *clip = SDL_GetClipboardText();
                     if (clip) {
                         clip[strcspn(clip, "\r\n")] = 0;
@@ -1170,12 +1441,16 @@ int main(int argc, char **argv)
             break;
         update_scale();
         {
-            int h = draw_form(&want_play);
-            SDL_RenderPresent(s_ren);
-            if (h != height) {          /* the status line wrapped differently */
-                height = h;
-                SDL_SetWindowSize(s_win, WIN_W, height);
+            int max_scroll;
+            (void)draw_form(&want_play);
+            max_scroll = s_content_h - (s_win_h - FOOTER_H);
+            if (max_scroll < 0) max_scroll = 0;
+            if (s_scroll > max_scroll || s_scroll < 0) {
+                /* clamp, and redraw at the clamped position */
+                s_scroll = s_scroll < 0 ? 0 : max_scroll;
+                (void)draw_form(&want_play);
             }
+            SDL_RenderPresent(s_ren);
         }
         if (want_play)
             play();                     /* returns only when the game could not start */
