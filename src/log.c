@@ -12,6 +12,10 @@
 #else
 #include <time.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 static int s_level = -1;
@@ -565,8 +569,14 @@ int log_pump_start(void)
     {
         int p[2], dupfd;
         pthread_t th;
-        if (isatty(2))
-            return 0;                   /* a terminal: everything, as it comes */
+        /* Avoid libc isatty(): the guest XBE has its own global function with
+         * that name, which would interpose this host call and execute guest
+         * code before its registers are initialized. */
+        {
+            struct termios tty;
+            if (syscall(SYS_ioctl, 2, TCGETS, &tty) == 0)
+                return 0;               /* a terminal: everything, as it comes */
+        }
         if ((dupfd = dup(2)) < 0)
             return 0;
         if (pipe(p) < 0) {
