@@ -17,7 +17,7 @@
 #if !defined(_WIN32)
 #define _GNU_SOURCE
 #include <signal.h>
-#include <ucontext.h>
+#include "uc_regs.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -87,7 +87,7 @@ int mmio_posix_step(void *uc_, uintptr_t fault, mmio_read_fn rd, mmio_write_fn w
                     uint32_t *insn_out)
 {
     ucontext_t *uc = (ucontext_t *)uc_;
-    uint32_t insn = *(const uint32_t *)uc->uc_mcontext.pc;
+    uint32_t insn = *(const uint32_t *)(uintptr_t)UC_PC(uc);
     a64_access a = {0};
 
     if (insn_out)
@@ -96,7 +96,7 @@ int mmio_posix_step(void *uc_, uintptr_t fault, mmio_read_fn rd, mmio_write_fn w
         return 0;
 
     if (a.is_write) {
-        uint64_t v = a.rt == 31 ? 0 : uc->uc_mcontext.regs[a.rt];
+        uint64_t v = a.rt == 31 ? 0 : UC_XREG(uc, a.rt);
         if (a.size < 8)
             v &= (1ULL << (a.size * 8)) - 1;
         wr(fault, v, a.size);
@@ -111,15 +111,15 @@ int mmio_posix_step(void *uc_, uintptr_t fault, mmio_read_fn rd, mmio_write_fn w
                 v &= 0xFFFFFFFFULL;
         }
         if (a.rt != 31)
-            uc->uc_mcontext.regs[a.rt] = v;
+            UC_XREG(uc, a.rt) = v;
     }
 
     if (a.wb_mode == 1)
-        uc->uc_mcontext.regs[a.rn] = fault;
+        UC_XREG(uc, a.rn) = fault;
     else if (a.wb_mode == 2)
-        uc->uc_mcontext.regs[a.rn] = fault + a.wb_imm;
+        UC_XREG(uc, a.rn) = fault + a.wb_imm;
 
-    uc->uc_mcontext.pc += 4;
+    UC_PC(uc) += 4;
     return 1;
 }
 

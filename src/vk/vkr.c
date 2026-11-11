@@ -1150,6 +1150,21 @@ VkrContext *vkr_create(void)
     f14.pushDescriptor = VK_TRUE;
     f13.pNext = &f14;
     di.pNext = &f13; di.queueCreateInfoCount = 1; di.pQueueCreateInfos = &qi;
+    {
+        /* MoltenVK (macOS) is a portability implementation: the spec requires
+         * VK_KHR_portability_subset to be enabled when the device lists it. */
+        static const char *ext_port = "VK_KHR_portability_subset";
+        VkExtensionProperties ep[256];
+        uint32_t ne = 256, k;
+        if (vkEnumerateDeviceExtensionProperties(c->phys, NULL, &ne, ep) >= 0)
+            for (k = 0; k < ne; k++)
+                if (!strcmp(ep[k].extensionName, ext_port)) {
+                    di.enabledExtensionCount = 1;
+                    di.ppEnabledExtensionNames = &ext_port;
+                    fprintf(stderr, "[VKR] portability subset enabled\n");
+                    break;
+                }
+    }
     if (vkCreateDevice(c->phys, &di, NULL, &c->dev) != VK_SUCCESS) goto fail;
     vkGetDeviceQueue(c->dev, c->qfam, 0, &c->queue);
     pci.queueFamilyIndex = c->qfam;
@@ -2670,11 +2685,25 @@ int vkr_flip_submit(VkrContext *c)
     if (!begin_cmd(c)) return -1;
     frame = c->resolved ? c->resolved : c->color;
     if (c->squeeze_all > 0.5f) {
-        /* Pillarboxed frame: the bars are black (nothing draws there). */
+        /* Pillarboxed frame: the bars are black (nothing draws there).
+         * The right bar also takes the menus' overscan strip: SSX 3's menu
+         * backgrounds stop ~9 guest pixels short of x = 640 (hidden by a TV's
+         * overscan), and what the game still draws there -- the end of the
+         * title rule, bits of snowflakes, a stray mark -- showed as broken
+         * lines at the picture's right edge on a monitor (the Windows build
+         * too). RECOMP_MENU_CROP_R=<guest px> (default 9, 0 = off). */
+        static int crop_r = -1;
         VkClearAttachment ca = {VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0, 0, 0, 1}}}};
-        uint32_t bw = (uint32_t)(((float)c->sw - (float)c->w * c->scale) * 0.5f);
+        uint32_t bw = (uint32_t)(((float)c->sw - (float)c->w * c->scale) * 0.5f), bwr;
+        if (crop_r < 0) {
+            const char *e = getenv("RECOMP_MENU_CROP_R");
+            crop_r = e && *e ? atoi(e) : 9;
+            if (crop_r < 0 || crop_r > 64) crop_r = 9;
+        }
+        bwr = bw + (uint32_t)((float)crop_r * c->scale + 0.5f);
+        if (bwr > c->sw / 2) bwr = bw;
         VkClearRect cr[2] = {{{{0, 0}, {bw, c->sh}}, 0, 1},
-                             {{{(int32_t)(c->sw - bw), 0}, {bw, c->sh}}, 0, 1}};
+                             {{{(int32_t)(c->sw - bwr), 0}, {bwr, c->sh}}, 0, 1}};
         if (bw) {
             begin_pass(c);
             vkCmdClearAttachments(c->cmd, 1, &ca, 2, cr);

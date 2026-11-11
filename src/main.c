@@ -35,6 +35,7 @@
 #endif
 #include "log.h"
 #include "journal.h"
+#include "xiso.h"          /* the toolkit's disc image reader */
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -353,6 +354,39 @@ void print_guest_regs_and_stack(void)
     }
 }
 
+#if defined(__APPLE__) && !defined(_WIN32)
+/* CoreGraphics, declared here: its headers clash with the Win32 vocabulary
+ * (BOOL, ...) this file uses. Safe from any thread, unlike SDL video. */
+typedef uint32_t CGDirectDisplayID;
+typedef struct CGDisplayMode *CGDisplayModeRef;
+extern CGDirectDisplayID CGMainDisplayID(void);
+extern CGDisplayModeRef CGDisplayCopyDisplayMode(CGDirectDisplayID display);
+extern size_t CGDisplayModeGetPixelWidth(CGDisplayModeRef mode);
+extern size_t CGDisplayModeGetPixelHeight(CGDisplayModeRef mode);
+extern void CGDisplayModeRelease(CGDisplayModeRef mode);
+#endif
+
+/* The primary display's size in pixels (0 if unknown), for the RECOMP_RES and
+ * widescreen "auto" defaults. Windows only had this before; on macOS the game
+ * started at 1080 and 4:3 until the window was resized. */
+static void host_display_size(int *cx, int *cy)
+{
+    *cx = *cy = 0;
+#ifdef _WIN32
+    *cx = GetSystemMetrics(SM_CXSCREEN);
+    *cy = GetSystemMetrics(SM_CYSCREEN);
+#elif defined(__APPLE__)
+    {
+        CGDisplayModeRef m = CGDisplayCopyDisplayMode(CGMainDisplayID());
+        if (m) {
+            *cx = (int)CGDisplayModeGetPixelWidth(m);
+            *cy = (int)CGDisplayModeGetPixelHeight(m);
+            CGDisplayModeRelease(m);
+        }
+    }
+#endif
+}
+
 void print_guest_stack(void)
 {
     if (g_xbox_mem_offset && g_esp) {
@@ -600,10 +634,12 @@ static void install_crash_handler(void) {}
 #else /* !_WIN32 */
 
 #include <signal.h>
-#include <ucontext.h>
+#include "uc_regs.h"
 #include <execinfo.h>
 #include <unistd.h>
+#if defined(__linux__)
 #include <sys/prctl.h>
+#endif
 #include <sys/mman.h>
 
 #include "mmio_posix.h"
@@ -699,19 +735,21 @@ static void segv_handler(int sig, siginfo_t *si, void *uc_)
     void *bt[32];
     uintptr_t fault = (uintptr_t)si->si_addr;
     int n;
-#if defined(__aarch64__)
-    uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
+    uintptr_t pc = (uintptr_t)UC_PC(uc);
+#if defined(__APPLE__)
+    /* Darwin reports an access to a protected page as SIGBUS. */
+    int is_fault = (sig == SIGSEGV || sig == SIGBUS);
 #else
-    uintptr_t pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    int is_fault = (sig == SIGSEGV);
 #endif
 
     uint32_t insn = 0;
 
-    if (sig == SIGSEGV && ac97_len && g_xbox_mem_offset
+    if (is_fault && ac97_len && g_xbox_mem_offset
             && mmio_va(fault) >= AC97_BASE && mmio_va(fault) < AC97_BASE + ac97_len
             && ac97_write(uc, fault, &insn))
         return;
-    if (sig == SIGSEGV && g_xbox_mem_offset && mmio_owned(mmio_va(fault))
+    if (is_fault && g_xbox_mem_offset && mmio_owned(mmio_va(fault))
             && mmio_posix_step(uc, fault, mmio_read, mmio_write, &insn))
         return;
 
@@ -774,6 +812,14 @@ static int find_game_dir(char *tried, size_t tried_size)
     tried[0] = 0;
     for (i = 0; i < n; i++) {
         FILE *f;
+        /* A disc image (.iso: XISO or a full redump) instead of a folder:
+         * D:\ is then served from it (toolkit xiso.c) and default.xbe is
+         * read out of it. */
+        if (xbox_XisoMount(cand[i])) {
+            snprintf(s_game_dir, sizeof s_game_dir, "%s", cand[i]);
+            snprintf(s_game_xbe, sizeof s_game_xbe, "%s/default.xbe", cand[i]);
+            return 1;
+        }
         snprintf(s_game_xbe, sizeof s_game_xbe, "%s/default.xbe", cand[i]);
         if ((f = fopen(s_game_xbe, "rb")) != NULL) {
             fclose(f);
@@ -852,11 +898,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (!getenv("RECOMP_RES")) {
         /* The primary monitor's height (1080, 1440, 2160...), so fullscreen
          * is sharp; 1080 if unknown. */
-        int cy = 0;
+        int cx = 0, cy = 0;
         char buf[16];
-#ifdef _WIN32
-        cy = GetSystemMetrics(SM_CYSCREEN);
-#endif
+        host_display_size(&cx, &cy);
         snprintf(buf, sizeof buf, "%d", cy >= 480 ? cy : 1080);
         _putenv_s("RECOMP_RES", buf);
     }
@@ -873,10 +917,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         const char *ws = getenv("RECOMP_WIDESCREEN");
         double a = 0;
         if (ws && !strcmp(ws, "auto")) {
-#ifdef _WIN32
-            int cx = GetSystemMetrics(SM_CXSCREEN), cy = GetSystemMetrics(SM_CYSCREEN);
+            int cx = 0, cy = 0;
+            host_display_size(&cx, &cy);
             a = cy > 0 ? (double)cx / cy : 0;
-#endif
         } else if (ws && strchr(ws, ':')) {
             double w = atof(ws), h = atof(strchr(ws, ':') + 1);
             a = h > 0 ? w / h : 0;
@@ -978,6 +1021,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         else
             fprintf(stderr, "[BOOT] hardware TSO on\n");
     }
+#elif defined(__APPLE__) && defined(__aarch64__)
+    /* macOS gives native processes no switch for the cores' TSO mode (only
+     * Rosetta uses it), so the guest's x86 ordering is not guaranteed. */
+    fprintf(stderr, "[BOOT] macOS arm64: no hardware TSO; expect ordering bugs\n");
 #endif
 
     printf("=== SSX 3 - Static Recompilation ===\n");
@@ -1008,9 +1055,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (!find_game_dir(tried, sizeof tried)) {
             snprintf(msg, sizeof msg,
                      "SSX 3's default.xbe was not found. Looked in:\n%s\n"
-                     "Put your own rip of the disc (default.xbe and the data folder) in a\n"
+                     "Put your own rip of the disc (default.xbe and the data folder, or the\n"
+                     "disc image .iso) in a\n"
                      "folder named 'game' next to the program (or its parent folder),\n"
-                     "or set RECOMP_GAME_DIR to the folder that holds default.xbe.", tried);
+                     "or set RECOMP_GAME_DIR to the folder that holds default.xbe or to the .iso.", tried);
             fprintf(stderr, "%s\n", msg);
             MessageBoxA(NULL, msg, "SSX 3", MB_ICONERROR);
             return 1;
@@ -1250,6 +1298,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 static BOOL load_xbe(const char *path, void **out_data, size_t *out_size)
 {
+    if (xbox_XisoMounted()) {
+        size_t n = 0;
+        void *d = xiso_read_all(xbox_XisoMounted(), "default.xbe", &n);
+        if (!d) {
+            fprintf(stderr, "No default.xbe in the disc image %s\n", xiso_path(xbox_XisoMounted()));
+            return FALSE;
+        }
+        *out_data = d;
+        *out_size = n;
+        return TRUE;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "Cannot open XBE: %s\n", path);
@@ -1311,6 +1370,19 @@ static void web_setup(void)
 }
 #endif
 
+#if defined(__APPLE__) && !defined(_WIN32)
+#include <pthread.h>
+static int s_apple_rc;
+static void *apple_game_thread(void *arg)
+{
+    extern void xbox_FramebufferMainThreadQuit(void);
+    (void)arg;
+    s_apple_rc = WinMain(NULL, NULL, NULL, 0);
+    xbox_FramebufferMainThreadQuit();
+    return NULL;
+}
+#endif
+
 /* Console entry point (for debugging -- lets you see printf output) */
 int main(int argc, char **argv)
 {
@@ -1321,6 +1393,24 @@ int main(int argc, char **argv)
 #endif
 #ifdef _WIN32
     return WinMain(GetModuleHandle(NULL), NULL, GetCommandLineA(), SW_SHOW);
+#elif defined(__APPLE__)
+    /* macOS: the window and its events must live on the main thread, so the
+     * game runs on its own thread (with a main-thread-sized stack and more:
+     * guest call chains are native call chains) and the main thread runs the
+     * window loop (fb_present_sdl.c) once the game asks for a window. */
+    {
+        extern void xbox_FramebufferMainThreadRun(void);
+        pthread_attr_t a;
+        pthread_t th;
+
+        pthread_attr_init(&a);
+        pthread_attr_setstacksize(&a, 256u << 20);
+        if (pthread_create(&th, &a, apple_game_thread, NULL) != 0)
+            return WinMain(NULL, NULL, NULL, 0);
+        xbox_FramebufferMainThreadRun();
+        pthread_join(th, NULL);
+        return s_apple_rc;
+    }
 #else
     return WinMain(NULL, NULL, NULL, 0);
 #endif

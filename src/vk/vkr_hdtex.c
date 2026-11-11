@@ -132,6 +132,12 @@ static void default_dir(char *out, size_t n)
         ssize_t r = readlink("/proc/self/exe", exe, sizeof exe - 1);
         len = r > 0 ? (size_t)r : 0;
     }
+#elif defined(__APPLE__)
+    {
+        extern int _NSGetExecutablePath(char *buf, uint32_t *size);
+        uint32_t sz = sizeof exe;
+        len = _NSGetExecutablePath(exe, &sz) == 0 ? strlen(exe) : 0;
+    }
 #endif
     if (!len || len >= sizeof exe)
         return;
@@ -144,6 +150,12 @@ static void default_dir(char *out, size_t n)
     snprintf(out, n, "%s/hd-textures", exe);
     if (has_map(out))
         return;
+#if defined(__APPLE__)
+    /* SSX3.app: Contents/MacOS/ssx3_recomp, the pack in Contents/Resources. */
+    snprintf(out, n, "%s/../Resources/hd-textures", exe);
+    if (has_map(out))
+        return;
+#endif
     while (len > 1 && exe[len - 2] != '/' && exe[len - 2] != '\\')
         len--;
     if (len > 1) {

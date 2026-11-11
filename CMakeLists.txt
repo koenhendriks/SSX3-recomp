@@ -58,6 +58,10 @@ add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 # time, so a newly generated file (an extra chunk, recomp_stubs_unresolved.c)
 # is silently left out of the build and shows up as unresolved externals.
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
+# Ghidra named one CRT function of the game `isatty`. As a global symbol it
+# would take the place of the host libc's isatty() for our own code (macOS
+# binds the executable's definition first), so the lifted copy is renamed.
+set_source_files_properties(${RECOMP_GEN_SOURCES} PROPERTIES COMPILE_DEFINITIONS "isatty=guest_isatty")
 
 # Core game sources
 set(GAME_SOURCES
@@ -159,6 +163,11 @@ elseif(EMSCRIPTEN)
             $<TARGET_FILE_DIR:${PROJECT_NAME}>)
 else()
     target_link_libraries(${PROJECT_NAME} PRIVATE m pthread dl)
+    if(APPLE)
+        # main.c host_display_size: the display's pixel size for the
+        # RECOMP_RES / widescreen "auto" defaults.
+        target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreGraphics")
+    endif()
     # Symbol names (sub_XXXXXXXX) in the crash handler's backtrace.
     target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
 endif()
@@ -222,11 +231,21 @@ else()
     find_package(SDL2 QUIET)
     find_package(SDL2_ttf QUIET)
     find_package(Fontconfig QUIET)
+    # macOS has no fontconfig: the launcher opens the system fonts by path.
+    if(APPLE AND NOT TARGET Fontconfig::Fontconfig)
+        add_library(Fontconfig::Fontconfig INTERFACE IMPORTED)
+    endif()
     if(TARGET SDL2::SDL2 AND TARGET SDL2_ttf::SDL2_ttf AND TARGET Fontconfig::Fontconfig)
-        add_executable(ssx3_launcher src/launcher/launcher_sdl.c)
+        # The disc image reader is the toolkit's (a .iso can be picked).
+        add_executable(ssx3_launcher src/launcher/launcher_sdl.c
+                       ${XBOXRECOMP_DIR}/src/kernel/xiso.c)
+        target_include_directories(ssx3_launcher PRIVATE ${XBOXRECOMP_DIR}/src/kernel)
         set_target_properties(ssx3_launcher PROPERTIES OUTPUT_NAME launcher)
         target_link_libraries(ssx3_launcher PRIVATE SDL2::SDL2 SDL2_ttf::SDL2_ttf
                               Fontconfig::Fontconfig)
+        if(APPLE)   # system_language(): CFLocaleCopyPreferredLanguages
+            target_link_libraries(ssx3_launcher PRIVATE "-framework CoreFoundation")
+        endif()
         target_include_directories(ssx3_launcher PRIVATE ${CMAKE_BINARY_DIR})   # build_info.h
         add_dependencies(ssx3_launcher ssx3_build_info)
     else()
