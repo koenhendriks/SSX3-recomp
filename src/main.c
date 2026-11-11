@@ -35,6 +35,7 @@
 #endif
 #include "log.h"
 #include "journal.h"
+#include "xiso.h"          /* the toolkit's disc image reader */
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -811,6 +812,14 @@ static int find_game_dir(char *tried, size_t tried_size)
     tried[0] = 0;
     for (i = 0; i < n; i++) {
         FILE *f;
+        /* A disc image (.iso: XISO or a full redump) instead of a folder:
+         * D:\ is then served from it (toolkit xiso.c) and default.xbe is
+         * read out of it. */
+        if (xbox_XisoMount(cand[i])) {
+            snprintf(s_game_dir, sizeof s_game_dir, "%s", cand[i]);
+            snprintf(s_game_xbe, sizeof s_game_xbe, "%s/default.xbe", cand[i]);
+            return 1;
+        }
         snprintf(s_game_xbe, sizeof s_game_xbe, "%s/default.xbe", cand[i]);
         if ((f = fopen(s_game_xbe, "rb")) != NULL) {
             fclose(f);
@@ -1046,9 +1055,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (!find_game_dir(tried, sizeof tried)) {
             snprintf(msg, sizeof msg,
                      "SSX 3's default.xbe was not found. Looked in:\n%s\n"
-                     "Put your own rip of the disc (default.xbe and the data folder) in a\n"
+                     "Put your own rip of the disc (default.xbe and the data folder, or the\n"
+                     "disc image .iso) in a\n"
                      "folder named 'game' next to the program (or its parent folder),\n"
-                     "or set RECOMP_GAME_DIR to the folder that holds default.xbe.", tried);
+                     "or set RECOMP_GAME_DIR to the folder that holds default.xbe or to the .iso.", tried);
             fprintf(stderr, "%s\n", msg);
             MessageBoxA(NULL, msg, "SSX 3", MB_ICONERROR);
             return 1;
@@ -1288,6 +1298,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 static BOOL load_xbe(const char *path, void **out_data, size_t *out_size)
 {
+    if (xbox_XisoMounted()) {
+        size_t n = 0;
+        void *d = xiso_read_all(xbox_XisoMounted(), "default.xbe", &n);
+        if (!d) {
+            fprintf(stderr, "No default.xbe in the disc image %s\n", xiso_path(xbox_XisoMounted()));
+            return FALSE;
+        }
+        *out_data = d;
+        *out_size = n;
+        return TRUE;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "Cannot open XBE: %s\n", path);

@@ -12,12 +12,19 @@ Snow Jam race at 60 FPS (2583x1440, MSAA 4x).
 2. The app is ad-hoc signed, not notarised. First start: right-click (Control-click)
    `SSX3.app` > Open > Open. On macOS 15 and newer, if that is refused: System Settings >
    Privacy & Security > "Open Anyway". Or in Terminal: `xattr -dr com.apple.quarantine SSX3.app`.
-3. In the launcher press **Browse**, pick your SSX 3 (PAL) rip (`default.xbe` + `data/`),
+3. In the launcher press **Disc image...** and pick your SSX 3 (PAL) disc image (`.iso`: XISO or a
+   full redump; it is read in place, nothing is copied), or **Folder...** for an extracted rip
+   (`default.xbe` + `data/`). You can also drop either on the launcher window. Then
    choose the settings, **Play**.
 
 Keyboard = player 1. Settings, `keys.ini` (copy `keys.example.ini`), logs and F12
 marks are in `~/Library/Application Support/SSX3`. F11 = fullscreen, F3 = FPS counter. Xbox One /
 Series and other controllers SDL knows work over Bluetooth or USB. Requires macOS 14+.
+
+With a disc image the saves (UDATA/TDATA) are kept in `~/Library/Application Support/SSX3/saves`
+(the image is read-only); the first time, the launcher copies over the saves of the folder you
+played before. Without the launcher they go to `<RECOMP_SYSTEM_DIR>/DiscSaves`, or `RECOMP_SAVE_DIR`.
+Disc images are macOS/Linux only for now; on Windows use the extracted folder.
 
 ## Build (from macOS, nothing installed on the Mac; Docker Desktop needed)
 

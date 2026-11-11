@@ -1525,10 +1525,18 @@ index a91edbe..ae120d6 100644
  }
  
 diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
-index a045752..e8d4932 100644
+index a045752..eaed443 100644
 --- a/src/kernel/CMakeLists.txt
 +++ b/src/kernel/CMakeLists.txt
-@@ -21,6 +21,7 @@ set(KERNEL_SOURCES
+@@ -10,6 +10,7 @@ set(KERNEL_SOURCES
+     kernel_rtl.c
+     kernel_memory.c
+     kernel_file.c
++    xiso.c
+     kernel_thread.c
+     kernel_sync.c
+     kernel_hal.c
+@@ -21,6 +22,7 @@ set(KERNEL_SOURCES
      kernel_bridge.c
      xbox_memory_layout.c
      guest_vmem.c
@@ -1536,7 +1544,7 @@ index a045752..e8d4932 100644
      icall_feedback.c
      recomp_trace.c
      nv2a_pb_scan.c
-@@ -44,6 +45,9 @@ if(WIN32)
+@@ -44,6 +46,9 @@ if(WIN32)
      # platform is an INTERFACE target on Windows: it contributes the src/
      # include path that "platform/xbox_winnt.h" resolves against.
      target_link_libraries(xbox_kernel PUBLIC platform kernel32 bcrypt)
@@ -3017,7 +3025,7 @@ index c65ba43..3d6fcec 100644
          old_protect,
          &old_protect
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index 42135e0..8178f8d 100644
+index 42135e0..190391b 100644
 --- a/src/kernel/kernel_file.c
 +++ b/src/kernel/kernel_file.c
 @@ -135,7 +135,7 @@ static BOOL translate_obj_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes,
@@ -3050,13 +3058,78 @@ index 42135e0..8178f8d 100644
  /* Convert Xbox access mask + disposition to POSIX open() flags. */
  static int posix_open_flags(ACCESS_MASK access, ULONG disposition)
  {
-@@ -792,6 +806,40 @@ static ULONG mode_to_xbox_attrs(mode_t m)
+@@ -792,6 +806,105 @@ static ULONG mode_to_xbox_attrs(mode_t m)
      return a;
  }
  
 +#ifndef STATUS_DIRECTORY_NOT_EMPTY
 +#define STATUS_DIRECTORY_NOT_EMPTY ((NTSTATUS)0xC0000101L)
 +#endif
++#ifndef STATUS_MEDIA_WRITE_PROTECTED
++#define STATUS_MEDIA_WRITE_PROTECTED ((NTSTATUS)0xC00000A2L)
++#endif
++#ifndef STATUS_FILE_IS_A_DIRECTORY
++#define STATUS_FILE_IS_A_DIRECTORY ((NTSTATUS)0xC00000BAL)
++#endif
++#ifndef STATUS_NOT_A_DIRECTORY
++#define STATUS_NOT_A_DIRECTORY ((NTSTATUS)0xC0000103L)
++#endif
++
++/* ---- the game disc served from an image (xiso.c) ------------------------
++ * When the game folder is a disc image, D:\ paths translate to
++ * "<image>/<inside>" (kernel_path.c). Those are looked up in the image's
++ * index; a handle on one keeps the image's fd (for fstat/fstatvfs) plus the
++ * entry's offset, size and its own position (w32_handle_set_iso). The disc
++ * is read-only, as on the console. */
++#include "xiso.h"
++
++/* stat of the image file, shaped as the entry: its size, a file or a
++ * directory. Times are the image's. */
++static void iso_stat(int fd, int is_dir, unsigned long long size, struct stat *st)
++{
++    if (fd < 0 || fstat(fd, st) != 0)
++        memset(st, 0, sizeof *st);
++    st->st_size = (off_t)size;
++    st->st_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
++    st->st_nlink = 1;
++}
++
++static NTSTATUS iso_create(PHANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
++                           const char *xbox_path, const char *host_path, int found,
++                           const xiso_entry *ie, ULONG CreateDisposition, ULONG CreateOptions)
++{
++    NTSTATUS st = STATUS_SUCCESS;
++    int fd;
++    if (CreateDisposition == XBOX_FILE_SUPERSEDE || CreateDisposition == XBOX_FILE_CREATE ||
++        CreateDisposition == XBOX_FILE_OVERWRITE || CreateDisposition == XBOX_FILE_OVERWRITE_IF)
++        st = found ? STATUS_MEDIA_WRITE_PROTECTED :
++             (CreateDisposition == XBOX_FILE_OVERWRITE ? STATUS_OBJECT_NAME_NOT_FOUND
++                                                       : STATUS_MEDIA_WRITE_PROTECTED);
++    else if (!found)
++        st = STATUS_OBJECT_NAME_NOT_FOUND;
++    else if ((CreateOptions & XBOX_FILE_DIRECTORY_FILE) && !ie->is_dir)
++        st = STATUS_NOT_A_DIRECTORY;
++    else if ((CreateOptions & XBOX_FILE_NON_DIRECTORY_FILE) && ie->is_dir)
++        st = STATUS_FILE_IS_A_DIRECTORY;
++    if (st == STATUS_SUCCESS) {
++        fd = open(xiso_path(xbox_XisoMounted()), O_RDONLY);
++        if (fd < 0)
++            st = STATUS_UNSUCCESSFUL;
++        else {
++            *FileHandle = w32_open_handle(fd, host_path);
++            w32_handle_set_iso(*FileHandle, ie->is_dir ? 2 : 1, ie->offset, ie->size, ie->node);
++        }
++    }
++    FTRACE("create '%s' -> image '%s' disp=%u opts=0x%X: 0x%08X", xbox_path, host_path,
++           (unsigned)CreateDisposition, (unsigned)CreateOptions, (unsigned)st);
++    if (IoStatusBlock) {
++        IoStatusBlock->Status = st;
++        IoStatusBlock->Information = st == STATUS_SUCCESS ? 1 : 0;   /* FILE_OPENED */
++    }
++    if (st != STATUS_SUCCESS && !found)
++        fprintf(stderr, "  [FILE] not on the disc image: '%s'\n", xbox_path ? xbox_path : host_path);
++    return st;
++}
 +
 +/* The POSIX twin of translate_obj_path: a name relative to
 + * ObjectAttributes->RootDirectory (XDeleteSaveGame opens each child of a save
@@ -3091,7 +3164,7 @@ index 42135e0..8178f8d 100644
  static NTSTATUS errno_to_status(int e)
  {
      switch (e) {
-@@ -805,7 +853,7 @@ static NTSTATUS errno_to_status(int e)
+@@ -805,7 +918,7 @@ static NTSTATUS errno_to_status(int e)
      }
  }
  
@@ -3100,7 +3173,7 @@ index 42135e0..8178f8d 100644
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
      PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess,
-@@ -817,14 +865,19 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -817,14 +930,27 @@ NTSTATUS __stdcall xbox_NtCreateFile(
      if (!FileHandle || !ObjectAttributes)
          return STATUS_INVALID_PARAMETER;
  
@@ -3112,6 +3185,14 @@ index 42135e0..8178f8d 100644
          return STATUS_OBJECT_PATH_NOT_FOUND;
      }
  
++    {
++        xiso_entry ie;
++        int il = xbox_XisoLookup(host_path, &ie);
++        if (il)
++            return iso_create(FileHandle, IoStatusBlock, xbox_path, host_path, il > 0, &ie,
++                              CreateDisposition, CreateOptions);
++    }
++
      int fd;
 -    if (CreateOptions & XBOX_FILE_DIRECTORY_FILE) {
 +    struct stat host_st;
@@ -3123,7 +3204,7 @@ index 42135e0..8178f8d 100644
          if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
              mkdir(host_path, 0755);   /* EEXIST is fine */
          fd = open(host_path, O_RDONLY | O_DIRECTORY);
-@@ -834,7 +887,10 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -834,7 +960,10 @@ NTSTATUS __stdcall xbox_NtCreateFile(
  
      if (fd < 0) {
          int e = errno;
@@ -3134,7 +3215,7 @@ index 42135e0..8178f8d 100644
          if (IoStatusBlock) {
              IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
              IoStatusBlock->Information = 0;
-@@ -847,6 +903,9 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -847,6 +976,9 @@ NTSTATUS __stdcall xbox_NtCreateFile(
          IoStatusBlock->Status = STATUS_SUCCESS;
          IoStatusBlock->Information = (CreateDisposition == XBOX_FILE_CREATE) ? 2 : 1;
      }
@@ -3144,13 +3225,46 @@ index 42135e0..8178f8d 100644
      XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile: %s -> handle=%p", host_path, *FileHandle);
      return STATUS_SUCCESS;
  }
-@@ -866,10 +925,20 @@ NTSTATUS __stdcall xbox_NtReadFile(
+@@ -866,10 +998,54 @@ NTSTATUS __stdcall xbox_NtReadFile(
          return STATUS_INVALID_HANDLE;
      }
  
 -    if (ByteOffset && ByteOffset->QuadPart >= 0)
 -        lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
--
++    {
++        unsigned long long ioff, isize, *ipos;
++        int inode, ik = w32_handle_iso(FileHandle, &ioff, &isize, &inode, &ipos);
++        if (ik == 2) {
++            IoStatusBlock->Status = STATUS_INVALID_DEVICE_REQUEST;
++            IoStatusBlock->Information = 0;
++            return STATUS_INVALID_DEVICE_REQUEST;
++        }
++        if (ik == 1) {
++            xiso_entry e;
++            unsigned long long pos = (ByteOffset && ByteOffset->QuadPart >= 0)
++                                   ? (unsigned long long)ByteOffset->QuadPart : *ipos;
++            long long r;
++            e.offset = ioff; e.size = isize; e.is_dir = 0; e.node = inode;
++            r = xiso_pread(xbox_XisoMounted(), &e, Buffer, Length, pos);
++            FTRACE("read image %s off=%llu len=%u -> %lld", w32_handle_path(FileHandle), pos,
++                   (unsigned)Length, r);
++            if (r < 0) {
++                IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
++                IoStatusBlock->Information = 0;
++                return STATUS_UNSUCCESSFUL;
++            }
++            *ipos = pos + (unsigned long long)r;
++            IoStatusBlock->Information = (ULONG_PTR)r;
++            if (r == 0 && Length > 0) {
++                IoStatusBlock->Status = STATUS_END_OF_FILE;
++                return STATUS_END_OF_FILE;
++            }
++            IoStatusBlock->Status = STATUS_SUCCESS;
++            if (Event) SetEvent(Event);
++            return STATUS_SUCCESS;
++        }
++    }
+ 
 -    ssize_t n = read(fd, Buffer, Length);
 +    /* An explicit offset: one pread, as Windows passes it in the OVERLAPPED.
 +     * lseek + read on a shared fd let two guest threads (loader and stream
@@ -3169,13 +3283,18 @@ index 42135e0..8178f8d 100644
      if (n < 0) {
          XBOX_TRACE(XBOX_LOG_FILE, "NtReadFile(handle=%p) errno=%d", FileHandle, errno);
          IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
-@@ -902,10 +971,16 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+@@ -902,10 +1078,22 @@ NTSTATUS __stdcall xbox_NtWriteFile(
          return STATUS_INVALID_HANDLE;
      }
  
 -    if (ByteOffset && ByteOffset->QuadPart >= 0)
 -        lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
--
++    if (w32_handle_iso(FileHandle, NULL, NULL, NULL, NULL)) {
++        IoStatusBlock->Status = STATUS_MEDIA_WRITE_PROTECTED;
++        IoStatusBlock->Information = 0;
++        return STATUS_MEDIA_WRITE_PROTECTED;
++    }
+ 
 -    ssize_t n = write(fd, Buffer, Length);
 +    ssize_t n;
 +    if (ByteOffset && ByteOffset->QuadPart >= 0) {   /* see NtReadFile */
@@ -3190,7 +3309,7 @@ index 42135e0..8178f8d 100644
      if (n < 0) {
          XBOX_TRACE(XBOX_LOG_FILE, "NtWriteFile(handle=%p) errno=%d", FileHandle, errno);
          IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
-@@ -923,6 +998,9 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+@@ -923,6 +1111,9 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
  {
      XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
      if (Handle && Handle != INVALID_HANDLE_VALUE) {
@@ -3200,7 +3319,7 @@ index 42135e0..8178f8d 100644
          CloseHandle(Handle);
          return STATUS_SUCCESS;
      }
-@@ -932,10 +1010,10 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+@@ -932,10 +1123,12 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
  NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
  {
      char host_path[MAX_PATH];
@@ -3208,30 +3327,67 @@ index 42135e0..8178f8d 100644
 -    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
 +    if (!posix_translate_obj_path(ObjectAttributes, host_path, MAX_PATH, NULL))
          return STATUS_OBJECT_PATH_NOT_FOUND;
++    if (xbox_XisoLookup(host_path, NULL))
++        return STATUS_MEDIA_WRITE_PROTECTED;
      XBOX_TRACE(XBOX_LOG_FILE, "NtDeleteFile: %s", host_path);
 +    FTRACE("delete %s", host_path);
      if (unlink(host_path) == 0) return STATUS_SUCCESS;
      if (rmdir(host_path)  == 0) return STATUS_SUCCESS;
      return STATUS_OBJECT_NAME_NOT_FOUND;
-@@ -953,6 +1031,8 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+@@ -953,8 +1146,14 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
      if (fd < 0)
          return STATUS_INVALID_HANDLE;
  
 +    FTRACE("queryinfo %s class=%d", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
 +           (int)FileInformationClass);
      struct stat st;
-     if (FileInformationClass != XboxFilePositionInformation) {
+-    if (FileInformationClass != XboxFilePositionInformation) {
++    unsigned long long iso_size = 0, *iso_pos = NULL;
++    int iso_kind = w32_handle_iso(FileHandle, NULL, &iso_size, NULL, &iso_pos);
++    if (iso_kind) {
++        iso_stat(fd, iso_kind == 2, iso_size, &st);
++    } else if (FileInformationClass != XboxFilePositionInformation) {
          if (fstat(fd, &st) != 0)
-@@ -1023,6 +1103,8 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+             return STATUS_UNSUCCESSFUL;
+     }
+@@ -984,7 +1183,7 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+         }
+         case XboxFilePositionInformation: {
+             PXBOX_FILE_POSITION_INFORMATION info = (PXBOX_FILE_POSITION_INFORMATION)FileInformation;
+-            off_t pos = lseek(fd, 0, SEEK_CUR);
++            off_t pos = iso_pos ? (off_t)*iso_pos : lseek(fd, 0, SEEK_CUR);
+             if (pos < 0) return STATUS_UNSUCCESSFUL;
+             info->CurrentByteOffset.QuadPart = pos;
+             IoStatusBlock->Status = STATUS_SUCCESS;
+@@ -1023,6 +1222,27 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
      if (fd < 0)
          return STATUS_INVALID_HANDLE;
  
 +    FTRACE("setinfo %s class=%d", w32_handle_path(FileHandle) ? w32_handle_path(FileHandle) : "?",
 +           (int)FileInformationClass);
++    {
++        unsigned long long *ipos;
++        if (w32_handle_iso(FileHandle, NULL, NULL, NULL, &ipos)) {
++            if (FileInformationClass == XboxFilePositionInformation) {
++                PXBOX_FILE_POSITION_INFORMATION info = (PXBOX_FILE_POSITION_INFORMATION)FileInformation;
++                if (info->CurrentByteOffset.QuadPart < 0)
++                    return STATUS_INVALID_PARAMETER;
++                *ipos = (unsigned long long)info->CurrentByteOffset.QuadPart;
++                IoStatusBlock->Status = STATUS_SUCCESS;
++                return STATUS_SUCCESS;
++            }
++            if (FileInformationClass == XboxFileBasicInformation) {
++                IoStatusBlock->Status = STATUS_SUCCESS;
++                return STATUS_SUCCESS;
++            }
++            IoStatusBlock->Status = STATUS_MEDIA_WRITE_PROTECTED;
++            return STATUS_MEDIA_WRITE_PROTECTED;
++        }
++    }
      switch (FileInformationClass) {
          case XboxFilePositionInformation: {
              PXBOX_FILE_POSITION_INFORMATION info = (PXBOX_FILE_POSITION_INFORMATION)FileInformation;
-@@ -1044,7 +1126,13 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
+@@ -1044,7 +1264,13 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
               * matches NT "delete on close" semantics exactly. */
              if (info->DeleteFile) {
                  const char* p = w32_handle_path(FileHandle);
@@ -3246,7 +3402,7 @@ index 42135e0..8178f8d 100644
              }
              IoStatusBlock->Status = STATUS_SUCCESS;
              return STATUS_SUCCESS;
-@@ -1073,6 +1161,8 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+@@ -1073,6 +1299,8 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
      (void)Length;
      if (!IoStatusBlock || !FsInformation)
          return STATUS_INVALID_PARAMETER;
@@ -3255,7 +3411,7 @@ index 42135e0..8178f8d 100644
  
      switch (FsInformationClass) {
          case XboxFileFsSizeInformation: {
-@@ -1124,11 +1214,14 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+@@ -1124,11 +1352,29 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
  
      if (!FileInformation)
          return STATUS_INVALID_PARAMETER;
@@ -3265,19 +3421,36 @@ index 42135e0..8178f8d 100644
 +    if (!posix_translate_obj_path(ObjectAttributes, host_path, MAX_PATH, &xbox_path))
          return STATUS_OBJECT_PATH_NOT_FOUND;
 -    if (stat(host_path, &st) != 0)
++    {
++        xiso_entry ie;
++        int il = xbox_XisoLookup(host_path, &ie);
++        if (il < 0) {
++            FTRACE("fullattrs '%s' -> image '%s': not found", xbox_path, host_path);
++            return STATUS_OBJECT_NAME_NOT_FOUND;
++        }
++        if (il > 0) {
++            int ifd = open(xiso_path(xbox_XisoMounted()), O_RDONLY);
++            iso_stat(ifd, ie.is_dir, ie.size, &st);
++            if (ifd >= 0) close(ifd);
++            goto have_stat;
++        }
++    }
 +    if (stat(host_path, &st) != 0) {
 +        FTRACE("fullattrs '%s' -> '%s': not found", xbox_path, host_path);
          return STATUS_OBJECT_NAME_NOT_FOUND;
 +    }
++have_stat:
 +    FTRACE("fullattrs '%s' -> '%s': size %lld dir %d", xbox_path, host_path, (long long)st.st_size, S_ISDIR(st.st_mode));
  
      unix_to_filetime(st.st_ctime, 0, &FileInformation->CreationTime);
      unix_to_filetime(st.st_atime, 0, &FileInformation->LastAccessTime);
-@@ -1146,12 +1239,36 @@ typedef struct {
+@@ -1146,12 +1392,39 @@ typedef struct {
      HANDLE handle;
      DIR*   dir;
      char   pattern[64];
 +    char   path[MAX_PATH];   /* the directory this enumeration walks */
++    int    iso_on;           /* an enumeration of a disc-image directory */
++    int    iso_next;         /* its next child index */
  } DIR_CONTEXT;
  
  static DIR_CONTEXT s_dir_contexts[MAX_DIR_CONTEXTS];
@@ -3303,6 +3476,7 @@ index 42135e0..8178f8d 100644
 +            s_dir_contexts[i].dir = NULL;
 +            s_dir_contexts[i].handle = NULL;
 +            s_dir_contexts[i].path[0] = '\0';
++            s_dir_contexts[i].iso_on = 0;
 +        }
 +    LeaveCriticalSection(&s_dir_cs);
 +}
@@ -3310,11 +3484,12 @@ index 42135e0..8178f8d 100644
  NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
      HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,
      PXBOX_IO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
-@@ -1180,6 +1297,16 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+@@ -1180,6 +1453,81 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
          if (!ctx) { LeaveCriticalSection(&s_dir_cs); return STATUS_INSUFFICIENT_RESOURCES; }
          ctx->handle = FileHandle;
          ctx->dir = NULL;
 +        ctx->path[0] = '\0';
++        ctx->iso_on = 0;
 +    }
 +    {
 +        /* Belt and braces for a handle closed some other way: a context
@@ -3324,10 +3499,74 @@ index 42135e0..8178f8d 100644
 +            closedir(ctx->dir);
 +            ctx->dir = NULL;
 +        }
++        if (ctx->iso_on && hp && strcmp(hp, ctx->path) != 0)
++            ctx->iso_on = 0;
++    }
++
++    {
++        int inode, ik = w32_handle_iso(FileHandle, NULL, NULL, &inode, NULL);
++        if (ik == 1) {
++            LeaveCriticalSection(&s_dir_cs);
++            IoStatusBlock->Status = STATUS_INVALID_PARAMETER;
++            return STATUS_INVALID_PARAMETER;
++        }
++        if (ik == 2) {
++            const char *hp = w32_handle_path(FileHandle);
++            const char *name;
++            xiso_entry ce;
++            struct stat cst;
++            if (RestartScan || !ctx->iso_on) {
++                ctx->iso_on = 1;
++                ctx->iso_next = 0;
++                snprintf(ctx->path, sizeof ctx->path, "%s", hp ? hp : "");
++                if (FileName && FileName->Buffer && FileName->Length > 0) {
++                    USHORT n = FileName->Length;
++                    if (n >= sizeof(ctx->pattern)) n = sizeof(ctx->pattern) - 1;
++                    memcpy(ctx->pattern, FileName->Buffer, n);
++                    ctx->pattern[n] = '\0';
++                } else {
++                    strcpy(ctx->pattern, "*");
++                }
++            }
++            for (;;) {
++                name = xiso_child(xbox_XisoMounted(), inode, ctx->iso_next++, &ce);
++                if (!name) {
++                    FTRACE("querydir image %s pattern '%s': no more files", hp ? hp : "?", ctx->pattern);
++                    ctx->iso_on = 0;
++                    ctx->handle = NULL;
++                    LeaveCriticalSection(&s_dir_cs);
++                    IoStatusBlock->Status = STATUS_NO_MORE_FILES;
++                    return STATUS_NO_MORE_FILES;
++                }
++                if (fnmatch(ctx->pattern, name, FNM_CASEFOLD) == 0)
++                    break;
++            }
++            LeaveCriticalSection(&s_dir_cs);
++            FTRACE("querydir image %s pattern '%s': '%s'", hp ? hp : "?", ctx->pattern, name);
++            iso_stat(w32_handle_fd(FileHandle), ce.is_dir, ce.size, &cst);
++
++            PXBOX_FILE_DIRECTORY_INFORMATION ient = (PXBOX_FILE_DIRECTORY_INFORMATION)FileInformation;
++            ULONG ihdr = (ULONG)((ULONG_PTR)&((PXBOX_FILE_DIRECTORY_INFORMATION)0)->FileName);
++            int inl = (int)strlen(name);
++            memset(ient, 0, Length);
++            unix_to_filetime(cst.st_ctime, 0, &ient->CreationTime);
++            unix_to_filetime(cst.st_atime, 0, &ient->LastAccessTime);
++            unix_to_filetime(cst.st_mtime, 0, &ient->LastWriteTime);
++            ient->ChangeTime = ient->LastWriteTime;
++            ient->EndOfFile.QuadPart = cst.st_size;
++            ient->AllocationSize.QuadPart = (cst.st_size + 4095) & ~4095LL;
++            ient->FileAttributes = mode_to_xbox_attrs(cst.st_mode);
++            ient->FileNameLength = inl;
++            if (inl > 0 && ihdr + (ULONG)inl <= Length)
++                memcpy(ient->FileName, name, inl);
++            IoStatusBlock->Status = STATUS_SUCCESS;
++            IoStatusBlock->Information = ihdr + inl;
++            return STATUS_SUCCESS;
++        }
      }
  
      if (RestartScan || ctx->dir == NULL) {
-@@ -1187,6 +1314,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+@@ -1187,6 +1535,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
          const char* dpath = w32_handle_path(FileHandle);
          if (!dpath) { LeaveCriticalSection(&s_dir_cs); return STATUS_UNSUCCESSFUL; }
          ctx->dir = opendir(dpath);
@@ -3335,7 +3574,7 @@ index 42135e0..8178f8d 100644
          if (!ctx->dir) {
              LeaveCriticalSection(&s_dir_cs);
              IoStatusBlock->Status = STATUS_NO_MORE_FILES;
-@@ -1209,6 +1337,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+@@ -1209,6 +1558,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
      for (;;) {
          de = readdir(ctx->dir);
          if (!de) {
@@ -3343,7 +3582,7 @@ index 42135e0..8178f8d 100644
              closedir(ctx->dir);
              ctx->dir = NULL;
              ctx->handle = NULL;
-@@ -1222,6 +1351,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+@@ -1222,6 +1572,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
              break;
      }
  
@@ -3351,7 +3590,7 @@ index 42135e0..8178f8d 100644
      char full[MAX_PATH];
      snprintf(full, sizeof(full), "%s/%s", dpath ? dpath : ".", de->d_name);
      if (stat(full, &st) != 0)
-@@ -1340,3 +1470,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
+@@ -1340,3 +1691,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
          *ReturnedLength = (ULONG)strlen(target);
      return STATUS_SUCCESS;
  }
@@ -3487,7 +3726,7 @@ index 1ad4fff..7ba275f 100644
  }
  
 diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
-index caf6390..627dbdf 100644
+index caf6390..a772c1f 100644
 --- a/src/kernel/kernel_path.c
 +++ b/src/kernel/kernel_path.c
 @@ -156,6 +156,19 @@ static int resolve_symlink(const char* xbox_path, char* out, size_t out_size)
@@ -3547,7 +3786,7 @@ index caf6390..627dbdf 100644
              sub_dir   = s_rules[i].sub_win;
              goto translate;
          }
-@@ -485,10 +514,15 @@ translate:
+@@ -485,10 +514,17 @@ translate:
  #include <sys/stat.h>
  #include <sys/types.h>
  #include <errno.h>
@@ -3555,6 +3794,8 @@ index caf6390..627dbdf 100644
 +#include <stdint.h>
 +#include <dirent.h>
 +#include <strings.h>
++
++#include "xiso.h"
  
  static char s_game_dir[MAX_PATH];
  static char s_save_dir[MAX_PATH];
@@ -3563,7 +3804,7 @@ index caf6390..627dbdf 100644
  
  /* Strip a single trailing '/' (but never the root '/'). */
  static void strip_trailing_slash(char* s)
-@@ -519,6 +553,8 @@ static void mkdir_p(const char* path)
+@@ -519,6 +555,8 @@ static void mkdir_p(const char* path)
          xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "mkdir %s: %s", tmp, strerror(errno));
  }
  
@@ -3572,7 +3813,7 @@ index caf6390..627dbdf 100644
  void xbox_path_init(const char* game_dir, const char* save_dir)
  {
      if (game_dir) {
-@@ -548,11 +584,187 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+@@ -548,11 +586,197 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
      strip_trailing_slash(s_game_dir);
      strip_trailing_slash(s_save_dir);
  
@@ -3599,6 +3840,16 @@ index caf6390..627dbdf 100644
 +            strip_trailing_slash(s_title_save_dir);
 +            fprintf(stderr, "[PATH] title saves (UDATA/TDATA) -> %s\n", s_title_save_dir);
 +        }
++    }
++
++    /* The game folder is a disc image (xiso.c): D:\ is served from it,
++     * read-only. The title's saves (UDATA/TDATA, otherwise under the game
++     * folder) then go beside the system files unless RECOMP_SAVE_DIR says
++     * where. */
++    if (xbox_XisoMount(s_game_dir) && !s_title_save_dir[0]) {
++        snprintf(s_title_save_dir, sizeof(s_title_save_dir), "%s/DiscSaves", s_save_dir);
++        mkdir_p(s_title_save_dir);
++        fprintf(stderr, "[PATH] title saves (UDATA/TDATA) -> %s\n", s_title_save_dir);
 +    }
 +
      s_initialized = TRUE;
@@ -3760,7 +4011,7 @@ index caf6390..627dbdf 100644
  BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
  {
      const char* remainder = NULL;
-@@ -566,6 +778,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -566,6 +790,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
      if (!s_initialized)
          xbox_path_init(NULL, NULL);
  
@@ -3770,7 +4021,7 @@ index caf6390..627dbdf 100644
      {
          char linked[512];
          if (resolve_symlink(xbox_path, linked, sizeof(linked)))
-@@ -577,6 +792,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -577,6 +804,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
          if (skip) {
              remainder = xbox_path + skip;
              base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
@@ -3779,11 +4030,12 @@ index caf6390..627dbdf 100644
              sub_dir   = s_rules[i].sub_posix;
              goto translate;
          }
-@@ -616,6 +833,7 @@ translate:
+@@ -616,6 +845,8 @@ translate:
                  host_path_buf[--n] = '\0';
          }
  
-+        fix_path_case(host_path_buf);
++        if (base_dir != s_game_dir || !xbox_XisoMounted())
++            fix_path_case(host_path_buf);   /* image lookups ignore case already */
          XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
          return TRUE;
      }
@@ -7817,6 +8069,545 @@ index 53f9d3d..f826168 100644
 +uint32_t xbox_TickCountMs(void);
 +
  #endif /* XBOX_MEMORY_LAYOUT_H */
+diff --git a/src/kernel/xiso.c b/src/kernel/xiso.c
+new file mode 100644
+index 0000000..65665f7
+--- /dev/null
++++ b/src/kernel/xiso.c
+@@ -0,0 +1,452 @@
++/*
++ * xiso.c - read-only XDVDFS (Xbox disc) image reader. See xiso.h.
++ *
++ * Written from the format. Little-endian, 2048-byte sectors:
++ *   - sector 32 of the game partition is the volume descriptor: the magic
++ *     "MICROSOFT*XBOX*MEDIA", the root directory's sector (u32 at 0x14) and
++ *     size in bytes (u32 at 0x18); the magic again at 0x7EC.
++ *   - a directory is a binary search tree in a flat table. Entry: left u16,
++ *     right u16 (dwords from the table start, 0 = none), start sector u32,
++ *     size u32, attributes u8 (0x10 = directory), name length u8, name.
++ *     Entries are 4-byte aligned; a slot whose left field is 0xFFFF is
++ *     padding (an entry never crosses a sector).
++ * The whole tree is indexed once at open (a disc has a few thousand files),
++ * children sorted by name, so lookups and enumeration never touch the image.
++ * Names from the image are data: separators, ':' and "."/".." are refused.
++ */
++#include "xiso.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define XISO_SECTOR 2048u
++#define XISO_ATTR_DIR 0x10
++static const char k_magic[20] = { 'M','I','C','R','O','S','O','F','T','*',
++                                  'X','B','O','X','*','M','E','D','I','A' };
++
++/* Byte offsets of the game partition: XISO (0), rebuilt images, XGD2,
++ * a redump of an original-Xbox disc (0x18300000), XGD3. */
++static const uint64_t k_bases[] = {
++    0x00000000ull, 0x0000FD90ull, 0x00002080ull, 0x00030600ull,
++    0x0FD90000ull, 0x18300000ull, 0x1FB20000ull,
++};
++
++#if defined(_WIN32)
++
++xiso *xiso_open(const char *path, char *why, size_t why_size)
++{
++    (void)path;
++    if (why && why_size)
++        snprintf(why, why_size, "disc images are not supported on Windows yet; use the extracted folder");
++    return NULL;
++}
++void xiso_close(xiso *x) { (void)x; }
++uint64_t xiso_partition_base(const xiso *x) { (void)x; return 0; }
++int xiso_file_count(const xiso *x) { (void)x; return 0; }
++int xiso_find(const xiso *x, const char *p, xiso_entry *o) { (void)x; (void)p; (void)o; return 0; }
++const char *xiso_child(const xiso *x, int d, int k, xiso_entry *o) { (void)x; (void)d; (void)k; (void)o; return NULL; }
++long long xiso_pread(const xiso *x, const xiso_entry *e, void *b, size_t l, uint64_t p)
++{ (void)x; (void)e; (void)b; (void)l; (void)p; return -1; }
++void *xiso_read_all(const xiso *x, const char *p, size_t *s) { (void)x; (void)p; (void)s; return NULL; }
++const char *xiso_path(const xiso *x) { (void)x; return ""; }
++int xbox_XisoMount(const char *path) { (void)path; return 0; }
++xiso *xbox_XisoMounted(void) { return NULL; }
++int xbox_XisoLookup(const char *h, xiso_entry *o) { (void)h; (void)o; return 0; }
++
++#else
++
++#include <fcntl.h>
++#include <unistd.h>
++#include <strings.h>
++#include <sys/stat.h>
++#include <pthread.h>
++
++typedef struct {
++    char    *name;
++    uint64_t offset;      /* absolute byte offset in the file */
++    uint64_t size;
++    int      is_dir;
++    int      first;       /* first child node (directories) */
++    int      count;       /* number of children */
++} xnode;
++
++struct xiso {
++    int      fd;
++    uint64_t file_size;
++    uint64_t base;
++    xnode   *nodes;
++    int      n, cap;
++    int      files;
++    char    *path;
++};
++
++static int read_at(int fd, void *buf, size_t len, uint64_t off)
++{
++    size_t done = 0;
++    while (done < len) {
++        ssize_t r = pread(fd, (char *)buf + done, len - done, (off_t)(off + done));
++        if (r <= 0)
++            return 0;
++        done += (size_t)r;
++    }
++    return 1;
++}
++
++static int has_descriptor(int fd, uint64_t file_size, uint64_t base)
++{
++    unsigned char d[XISO_SECTOR];
++    uint64_t off = base + 32ull * XISO_SECTOR;
++    if (off + XISO_SECTOR > file_size || !read_at(fd, d, sizeof d, off))
++        return 0;
++    return memcmp(d, k_magic, 20) == 0 && memcmp(d + 0x7EC, k_magic, 20) == 0;
++}
++
++static int add_node(xiso *x)
++{
++    if (x->n == x->cap) {
++        int nc = x->cap ? x->cap * 2 : 1024;
++        xnode *nn;
++        if (nc > 4 * 1024 * 1024)
++            return -1;
++        nn = (xnode *)realloc(x->nodes, (size_t)nc * sizeof *nn);
++        if (!nn)
++            return -1;
++        x->nodes = nn;
++        x->cap = nc;
++    }
++    memset(&x->nodes[x->n], 0, sizeof x->nodes[0]);
++    return x->n++;
++}
++
++static int safe_name(const char *s, int n)
++{
++    int i;
++    if (n <= 0 || (n == 1 && s[0] == '.') || (n == 2 && s[0] == '.' && s[1] == '.'))
++        return 0;
++    for (i = 0; i < n; i++)
++        if (s[i] == '/' || s[i] == '\\' || s[i] == ':' || s[i] == '\0')
++            return 0;
++    return 1;
++}
++
++static const xiso *s_sort_ctx;
++static int cmp_nodes(const void *a, const void *b)
++{
++    return strcasecmp(s_sort_ctx->nodes[*(const int *)a].name,
++                      s_sort_ctx->nodes[*(const int *)b].name);
++}
++
++/* Reads directory node `d`'s table and appends its children (sorted). */
++static int index_dir(xiso *x, int d, char *why, size_t why_size)
++{
++    uint64_t size = x->nodes[d].size, off = x->nodes[d].offset;
++    unsigned char *t, *seen;
++    int *stack, sp = 0, first = x->n, i, cnt, *order;
++    size_t slots;
++
++    x->nodes[d].first = first;
++    x->nodes[d].count = 0;
++    if (size == 0)
++        return 1;
++    if (size > 64u * 1024 * 1024 || off + size > x->file_size) {
++        snprintf(why, why_size, "a directory table lies outside the image (truncated file?)");
++        return 0;
++    }
++    slots = (size_t)(size / 4) + 1;
++    t = (unsigned char *)malloc((size_t)size);
++    seen = (unsigned char *)calloc(slots, 1);
++    stack = (int *)malloc(slots * sizeof *stack);
++    if (!t || !seen || !stack || !read_at(x->fd, t, (size_t)size, off)) {
++        free(t); free(seen); free(stack);
++        snprintf(why, why_size, "the image could not be read");
++        return 0;
++    }
++    stack[sp++] = 0;
++    while (sp > 0) {
++        size_t e = (size_t)stack[--sp] * 4;
++        unsigned left, right, nlen, attr;
++        uint32_t sector, fsize;
++        int k;
++        if (e / 4 >= slots || seen[e / 4] || e + 14 > size)
++            continue;
++        seen[e / 4] = 1;
++        left = t[e] | (t[e + 1] << 8);
++        right = t[e + 2] | (t[e + 3] << 8);
++        if (left == 0xFFFF)
++            continue;                       /* padding */
++        sector = (uint32_t)t[e + 4] | ((uint32_t)t[e + 5] << 8) |
++                 ((uint32_t)t[e + 6] << 16) | ((uint32_t)t[e + 7] << 24);
++        fsize = (uint32_t)t[e + 8] | ((uint32_t)t[e + 9] << 8) |
++                ((uint32_t)t[e + 10] << 16) | ((uint32_t)t[e + 11] << 24);
++        attr = t[e + 12];
++        nlen = t[e + 13];
++        if (e + 14 + nlen > size || !safe_name((const char *)t + e + 14, (int)nlen))
++            continue;
++        if ((k = add_node(x)) < 0) {
++            free(t); free(seen); free(stack);
++            snprintf(why, why_size, "too many files in the image");
++            return 0;
++        }
++        x->nodes[k].name = (char *)malloc(nlen + 1);
++        if (!x->nodes[k].name) {
++            free(t); free(seen); free(stack);
++            return 0;
++        }
++        memcpy(x->nodes[k].name, t + e + 14, nlen);
++        x->nodes[k].name[nlen] = 0;
++        x->nodes[k].offset = x->base + (uint64_t)sector * XISO_SECTOR;
++        x->nodes[k].size = fsize;
++        x->nodes[k].is_dir = (attr & XISO_ATTR_DIR) != 0;
++        if (!x->nodes[k].is_dir)
++            x->files++;
++        if (left && sp < (int)slots)
++            stack[sp++] = (int)left;
++        if (right && sp < (int)slots)
++            stack[sp++] = (int)right;
++    }
++    free(t); free(seen); free(stack);
++
++    /* Sort this directory's children by name (they are contiguous). */
++    cnt = x->n - first;
++    x->nodes[d].count = cnt;
++    if (cnt > 1) {
++        xnode *tmp = (xnode *)malloc((size_t)cnt * sizeof *tmp);
++        order = (int *)malloc((size_t)cnt * sizeof *order);
++        if (!tmp || !order) {
++            free(tmp); free(order);
++            return 0;
++        }
++        for (i = 0; i < cnt; i++)
++            order[i] = first + i;
++        s_sort_ctx = x;
++        qsort(order, (size_t)cnt, sizeof *order, cmp_nodes);
++        for (i = 0; i < cnt; i++)
++            tmp[i] = x->nodes[order[i]];
++        memcpy(&x->nodes[first], tmp, (size_t)cnt * sizeof *tmp);
++        free(tmp); free(order);
++    }
++    return 1;
++}
++
++xiso *xiso_open(const char *path, char *why, size_t why_size)
++{
++    char dummy[8];
++    struct stat st;
++    xiso *x;
++    unsigned char d[XISO_SECTOR];
++    size_t i;
++    int r, k;
++
++    if (!why) { why = dummy; why_size = sizeof dummy; }
++    why[0] = 0;
++    if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
++        snprintf(why, why_size, "not a file");
++        return NULL;
++    }
++    x = (xiso *)calloc(1, sizeof *x);
++    if (!x)
++        return NULL;
++    x->fd = open(path, O_RDONLY);
++    if (x->fd < 0) {
++        snprintf(why, why_size, "the file could not be opened");
++        free(x);
++        return NULL;
++    }
++    x->file_size = (uint64_t)st.st_size;
++    for (i = 0; i < sizeof k_bases / sizeof k_bases[0]; i++)
++        if (has_descriptor(x->fd, x->file_size, k_bases[i]))
++            break;
++    if (i == sizeof k_bases / sizeof k_bases[0]) {
++        snprintf(why, why_size, "not an Xbox disc image (no XDVDFS volume descriptor)");
++        xiso_close(x);
++        return NULL;
++    }
++    x->base = k_bases[i];
++    read_at(x->fd, d, sizeof d, x->base + 32ull * XISO_SECTOR);
++    if ((k = add_node(x)) != 0) {
++        xiso_close(x);
++        return NULL;
++    }
++    x->nodes[0].name = strdup("");
++    x->nodes[0].is_dir = 1;
++    x->nodes[0].offset = x->base + (uint64_t)(d[0x14] | (d[0x15] << 8) | (d[0x16] << 16) |
++                                              ((uint32_t)d[0x17] << 24)) * XISO_SECTOR;
++    x->nodes[0].size = (uint32_t)(d[0x18] | (d[0x19] << 8) | (d[0x1A] << 16) |
++                                  ((uint32_t)d[0x1B] << 24));
++    if (x->nodes[0].size == 0) {
++        snprintf(why, why_size, "the image has an empty root directory");
++        xiso_close(x);
++        return NULL;
++    }
++    /* Breadth first: every directory node gets its children appended. */
++    for (k = 0; k < x->n; k++) {
++        if (!x->nodes[k].is_dir)
++            continue;
++        r = index_dir(x, k, why, why_size);
++        if (!r) {
++            if (!why[0])
++                snprintf(why, why_size, "the image's directory tree is damaged");
++            xiso_close(x);
++            return NULL;
++        }
++    }
++    x->path = strdup(path);
++    return x;
++}
++
++void xiso_close(xiso *x)
++{
++    int i;
++    if (!x)
++        return;
++    if (x->fd >= 0)
++        close(x->fd);
++    for (i = 0; i < x->n; i++)
++        free(x->nodes[i].name);
++    free(x->nodes);
++    free(x->path);
++    free(x);
++}
++
++uint64_t xiso_partition_base(const xiso *x) { return x ? x->base : 0; }
++int xiso_file_count(const xiso *x) { return x ? x->files : 0; }
++const char *xiso_path(const xiso *x) { return x && x->path ? x->path : ""; }
++
++static void fill(const xiso *x, int k, xiso_entry *out)
++{
++    if (!out)
++        return;
++    out->offset = x->nodes[k].offset;
++    out->size = x->nodes[k].size;
++    out->is_dir = x->nodes[k].is_dir;
++    out->node = k;
++}
++
++int xiso_find(const xiso *x, const char *path, xiso_entry *out)
++{
++    int cur = 0;
++    const char *p = path ? path : "";
++    if (!x)
++        return 0;
++    for (;;) {
++        const char *s;
++        size_t len;
++        int i, found = -1;
++        while (*p == '/' || *p == '\\')
++            p++;
++        if (!*p)
++            break;
++        for (s = p; *s && *s != '/' && *s != '\\'; s++)
++            ;
++        len = (size_t)(s - p);
++        if (!x->nodes[cur].is_dir)
++            return 0;
++        for (i = 0; i < x->nodes[cur].count; i++) {
++            const char *nm = x->nodes[x->nodes[cur].first + i].name;
++            if (strlen(nm) == len && strncasecmp(nm, p, len) == 0) {
++                found = x->nodes[cur].first + i;
++                break;
++            }
++        }
++        if (found < 0)
++            return 0;
++        cur = found;
++        p = s;
++    }
++    fill(x, cur, out);
++    return 1;
++}
++
++const char *xiso_child(const xiso *x, int dir, int k, xiso_entry *out)
++{
++    int n;
++    if (!x || dir < 0 || dir >= x->n || !x->nodes[dir].is_dir || k < 0 || k >= x->nodes[dir].count)
++        return NULL;
++    n = x->nodes[dir].first + k;
++    fill(x, n, out);
++    return x->nodes[n].name;
++}
++
++long long xiso_pread(const xiso *x, const xiso_entry *e, void *buf, size_t len, uint64_t pos)
++{
++    size_t done = 0;
++    if (!x || !e || e->is_dir)
++        return -1;
++    if (pos >= e->size)
++        return 0;
++    if (len > e->size - pos)
++        len = (size_t)(e->size - pos);
++    while (done < len) {
++        ssize_t r = pread(x->fd, (char *)buf + done, len - done, (off_t)(e->offset + pos + done));
++        if (r < 0)
++            return done ? (long long)done : -1;
++        if (r == 0)
++            break;                          /* a trimmed image ends early */
++        done += (size_t)r;
++    }
++    return (long long)done;
++}
++
++void *xiso_read_all(const xiso *x, const char *path, size_t *size_out)
++{
++    xiso_entry e;
++    void *buf;
++    if (!xiso_find(x, path, &e) || e.is_dir || e.size > 512u * 1024 * 1024)
++        return NULL;
++    buf = malloc(e.size ? (size_t)e.size : 1);
++    if (!buf)
++        return NULL;
++    if (xiso_pread(x, &e, buf, (size_t)e.size, 0) != (long long)e.size) {
++        free(buf);
++        return NULL;
++    }
++    if (size_out)
++        *size_out = (size_t)e.size;
++    return buf;
++}
++
++/* ---- the mounted game disc ---------------------------------------------- */
++
++static xiso *s_mount;
++static pthread_mutex_t s_mount_lock = PTHREAD_MUTEX_INITIALIZER;
++
++int xbox_XisoMount(const char *path)
++{
++    char why[160];
++    xiso *x;
++    int ok;
++    pthread_mutex_lock(&s_mount_lock);
++    if (s_mount && path && strcmp(s_mount->path, path) == 0) {
++        pthread_mutex_unlock(&s_mount_lock);
++        return 1;
++    }
++    x = xiso_open(path, why, sizeof why);
++    if (x) {
++        xiso_close(s_mount);
++        s_mount = x;
++        fprintf(stderr, "[XISO] game disc: %s (partition at 0x%llX, %d files)\n", path,
++                (unsigned long long)x->base, x->files);
++    }
++    ok = x != NULL;
++    pthread_mutex_unlock(&s_mount_lock);
++    return ok;
++}
++
++xiso *xbox_XisoMounted(void)
++{
++    return s_mount;
++}
++
++int xbox_XisoLookup(const char *host_path, xiso_entry *out)
++{
++    size_t l;
++    if (!s_mount || !host_path)
++        return 0;
++    l = strlen(s_mount->path);
++    if (strncmp(host_path, s_mount->path, l) != 0 || (host_path[l] && host_path[l] != '/'))
++        return 0;
++    return xiso_find(s_mount, host_path + l, out) ? 1 : -1;
++}
++
++#endif /* !_WIN32 */
+diff --git a/src/kernel/xiso.h b/src/kernel/xiso.h
+new file mode 100644
+index 0000000..34213d5
+--- /dev/null
++++ b/src/kernel/xiso.h
+@@ -0,0 +1,75 @@
++/*
++ * xiso.h - read-only Xbox disc image (XDVDFS) access, so a title can run
++ * straight from its .iso instead of an extracted folder.
++ *
++ * Accepted layouts: an XISO (the game partition is the whole file), a full
++ * redump of the disc (video partition first, game partition at 0x18300000)
++ * and the rebuilt / XGD2 / XGD3 offsets seen in the wild. The volume
++ * descriptor's magic is checked at both ends, as the format repeats it.
++ *
++ * Standalone C (no kernel dependencies) so the launcher can use it too to
++ * check an image before the game starts. POSIX only for now; on Windows
++ * xiso_open() fails and the folder path is the way.
++ */
++#ifndef XBOXRECOMP_XISO_H
++#define XBOXRECOMP_XISO_H
++
++#include <stdint.h>
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct xiso xiso;
++
++typedef struct {
++    uint64_t offset;    /* byte offset of the data in the image file */
++    uint64_t size;      /* bytes (a directory: its entry table's size) */
++    int      is_dir;
++    int      node;      /* index for xiso_child(); 0 = the root */
++} xiso_entry;
++
++/* Opens and indexes an image (the whole directory tree is read once).
++ * NULL if `path` is not an Xbox disc image; `why` (may be NULL) then says
++ * why in a short English sentence. */
++xiso *xiso_open(const char *path, char *why, size_t why_size);
++void  xiso_close(xiso *x);
++
++/* Byte offset of the game partition in the file, and the file count. */
++uint64_t xiso_partition_base(const xiso *x);
++int      xiso_file_count(const xiso *x);
++
++/* Looks up a path inside the image: case-insensitive, '/' or '\\',
++ * "" or "/" = the root. 1 = found, 0 = not there. */
++int xiso_find(const xiso *x, const char *path, xiso_entry *out);
++
++/* The k-th child (k from 0) of directory node `dir`, in name order:
++ * its name, or NULL past the last. */
++const char *xiso_child(const xiso *x, int dir, int k, xiso_entry *out);
++
++/* Reads `len` bytes of an entry from `pos`. Returns the bytes read
++ * (short at the end of the file), -1 on an I/O error. */
++long long xiso_pread(const xiso *x, const xiso_entry *e, void *buf, size_t len, uint64_t pos);
++
++/* A whole file into a malloc'd buffer (free() it). NULL if missing. */
++void *xiso_read_all(const xiso *x, const char *path, size_t *size_out);
++
++/* The image's own path (as given to xiso_open). */
++const char *xiso_path(const xiso *x);
++
++/* ---- the image the kernel serves D:\ from (kernel_path.c / kernel_file.c) */
++
++/* Mounts `path` as the game disc when it is an image (idempotent for the
++ * same path). 1 = mounted, 0 = not an image (a folder: nothing changes). */
++int xbox_XisoMount(const char *path);
++/* The mounted image, or NULL. */
++xiso *xbox_XisoMounted(void);
++/* `host_path` is "<image path>/<inside>": 1 and `out` filled when found,
++ * -1 when it is inside the image but missing, 0 when not inside it. */
++int xbox_XisoLookup(const char *host_path, xiso_entry *out);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
 diff --git a/src/nv2a/qemu_shim.h b/src/nv2a/qemu_shim.h
 index 0f73753..05a3399 100644
 --- a/src/nv2a/qemu_shim.h
@@ -7835,7 +8626,7 @@ index 0f73753..05a3399 100644
  #define QEMU_CLOCK_VIRTUAL 0
  
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 93288d5..7a63e12 100644
+index 93288d5..443e649 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -18,6 +18,9 @@
@@ -7886,7 +8677,53 @@ index 93288d5..7a63e12 100644
  
      /* semaphore */
      long            sem_count;
-@@ -403,9 +412,45 @@ BOOL DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc, PHANDLE dst,
+@@ -305,6 +314,12 @@ typedef struct w32_object {
+     int             fd;
+     SIZE_T          map_size;
+     char           *file_path;
++
++    /* a file or directory inside the mounted disc image (kernel/xiso.c):
++     * 0 = an ordinary host file; 1 = image file, 2 = image directory */
++    int             iso_kind;
++    int             iso_node;
++    unsigned long long iso_off, iso_size, iso_pos;
+ } w32_object;
+ 
+ /* pseudo handles for "current thread"/"current process" */
+@@ -371,6 +386,32 @@ int w32_handle_fd(HANDLE h)
+     return (o && o->kind == K_FILE) ? o->fd : -1;
+ }
+ 
++void w32_handle_set_iso(HANDLE h, int kind, unsigned long long off,
++                        unsigned long long size, int node)
++{
++    w32_object *o = (w32_object *)h;
++    if (!o || o->kind != K_FILE)
++        return;
++    o->iso_kind = kind;
++    o->iso_off  = off;
++    o->iso_size = size;
++    o->iso_node = node;
++    o->iso_pos  = 0;
++}
++
++int w32_handle_iso(HANDLE h, unsigned long long *off, unsigned long long *size,
++                   int *node, unsigned long long **pos)
++{
++    w32_object *o = (w32_object *)h;
++    if (!o || o->kind != K_FILE || !o->iso_kind)
++        return 0;
++    if (off)  *off  = o->iso_off;
++    if (size) *size = o->iso_size;
++    if (node) *node = o->iso_node;
++    if (pos)  *pos  = &o->iso_pos;
++    return o->iso_kind;
++}
++
+ const char *w32_handle_path(HANDLE h)
+ {
+     w32_object *o = (w32_object *)h;
+@@ -403,9 +444,45 @@ BOOL DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc, PHANDLE dst,
  }
  
  /* ---- deadline helper -------------------------------------------------- */
@@ -7933,7 +8770,7 @@ index 93288d5..7a63e12 100644
      ts->tv_sec  += ms / 1000;
      ts->tv_nsec += (long)(ms % 1000) * 1000000L;
      if (ts->tv_nsec >= 1000000000L) { ts->tv_sec++; ts->tv_nsec -= 1000000000L; }
-@@ -445,7 +490,7 @@ static int waitable_due(w32_object *o)
+@@ -445,7 +522,7 @@ static int waitable_due(w32_object *o)
      struct timespec now;
      if (o->waitable_triggered) return 1;
      if (!o->waitable_armed) return 0;
@@ -7942,7 +8779,7 @@ index 93288d5..7a63e12 100644
      if (timespec_before(&now, &o->waitable_due_time)) return 0;
      o->waitable_triggered = 1;
      return 1;
-@@ -463,11 +508,20 @@ static DWORD wait_single(w32_object *o, DWORD ms)
+@@ -463,11 +540,20 @@ static DWORD wait_single(w32_object *o, DWORD ms)
  
      pthread_mutex_lock(&o->lock);
      DWORD result = WAIT_OBJECT_0;
@@ -7964,7 +8801,7 @@ index 93288d5..7a63e12 100644
          case K_THREAD: ready = o->exited;   break;
          case K_SEM:    ready = (o->sem_count > 0); break;
          case K_MUTEX:
-@@ -477,6 +531,10 @@ static DWORD wait_single(w32_object *o, DWORD ms)
+@@ -477,6 +563,10 @@ static DWORD wait_single(w32_object *o, DWORD ms)
          default:       ready = 1; break;
          }
          if (ready) break;
@@ -7975,7 +8812,7 @@ index 93288d5..7a63e12 100644
  
          /* An armed timer has its own deadline. Waiting on the caller's alone
           * would sleep straight past the due time, so take whichever comes
-@@ -488,16 +546,18 @@ static DWORD wait_single(w32_object *o, DWORD ms)
+@@ -488,16 +578,18 @@ static DWORD wait_single(w32_object *o, DWORD ms)
              until = o->waitable_due_time;
              bounded = 1;
          }
@@ -7996,7 +8833,7 @@ index 93288d5..7a63e12 100644
          case K_WAITABLE_TIMER:
              if (!o->waitable_manual_reset) { o->waitable_triggered = 0; o->waitable_armed = 0; }
              break;
-@@ -510,6 +570,26 @@ static DWORD wait_single(w32_object *o, DWORD ms)
+@@ -510,6 +602,26 @@ static DWORD wait_single(w32_object *o, DWORD ms)
      return result;
  }
  
@@ -8023,7 +8860,7 @@ index 93288d5..7a63e12 100644
  DWORD WaitForSingleObject(HANDLE h, DWORD ms)
  {
      if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS)
-@@ -545,10 +625,17 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+@@ -545,10 +657,17 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
              return WAIT_IO_COMPLETION;
  
          if (waitAll) {
@@ -8043,7 +8880,7 @@ index 93288d5..7a63e12 100644
          } else {
              for (DWORD i = 0; i < count; i++)
                  if (WaitForSingleObject(handles[i], 0) == WAIT_OBJECT_0)
-@@ -557,7 +644,7 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+@@ -557,7 +676,7 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
  
          if (timed) {
              struct timespec now;
@@ -8052,7 +8889,7 @@ index 93288d5..7a63e12 100644
              if (now.tv_sec > ts.tv_sec ||
                  (now.tv_sec == ts.tv_sec && now.tv_nsec >= ts.tv_nsec))
                  return WAIT_TIMEOUT;
-@@ -609,9 +696,16 @@ BOOL PulseEvent(HANDLE h)
+@@ -609,9 +728,16 @@ BOOL PulseEvent(HANDLE h)
  {
      w32_object *o = (w32_object *)h;
      if (!o || o->kind != K_EVENT) return FALSE;
@@ -8071,7 +8908,7 @@ index 93288d5..7a63e12 100644
      o->signaled = 0;
      pthread_mutex_unlock(&o->lock);
      return TRUE;
-@@ -730,8 +824,14 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
+@@ -730,8 +856,14 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
  
      pthread_attr_t attr;
      pthread_attr_init(&attr);
@@ -8088,7 +8925,7 @@ index 93288d5..7a63e12 100644
  
      if (pthread_create(&o->thread, &attr, thread_trampoline, o) != 0) {
          pthread_attr_destroy(&attr);
-@@ -764,7 +864,7 @@ VOID ExitThread(DWORD exitCode)
+@@ -764,7 +896,7 @@ VOID ExitThread(DWORD exitCode)
  
  BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
  {
@@ -8097,7 +8934,7 @@ index 93288d5..7a63e12 100644
      if (!o || o->kind != K_THREAD || !exitCode) return FALSE;
      pthread_mutex_lock(&o->lock);
      *exitCode = o->exited ? o->exit_code : STILL_ACTIVE;
-@@ -774,7 +874,7 @@ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
+@@ -774,7 +906,7 @@ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
  
  DWORD ResumeThread(HANDLE h)
  {
@@ -8106,7 +8943,7 @@ index 93288d5..7a63e12 100644
      if (!o || o->kind != K_THREAD) return (DWORD)-1;
      pthread_mutex_lock(&o->lock);
      DWORD prev = (DWORD)o->suspend_count;
-@@ -788,7 +888,9 @@ DWORD SuspendThread(HANDLE h)
+@@ -788,7 +920,9 @@ DWORD SuspendThread(HANDLE h)
  {
      /* True mid-run suspension is not supported on POSIX; only the
       * CREATE_SUSPENDED start gate is. Track the count for ResumeThread. */
@@ -8117,7 +8954,7 @@ index 93288d5..7a63e12 100644
      if (!o || o->kind != K_THREAD) return (DWORD)-1;
      pthread_mutex_lock(&o->lock);
      DWORD prev = (DWORD)o->suspend_count;
-@@ -799,7 +901,7 @@ DWORD SuspendThread(HANDLE h)
+@@ -799,7 +933,7 @@ DWORD SuspendThread(HANDLE h)
  
  BOOL TerminateThread(HANDLE h, DWORD exitCode)
  {
@@ -8126,7 +8963,7 @@ index 93288d5..7a63e12 100644
      if (!o || o->kind != K_THREAD) return FALSE;
      pthread_cancel(o->thread);
      pthread_mutex_lock(&o->lock);
-@@ -815,7 +917,19 @@ BOOL SetThreadPriority(HANDLE h, int priority)
+@@ -815,7 +949,19 @@ BOOL SetThreadPriority(HANDLE h, int priority)
  {
      w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)h;
      if (o && o->kind == K_THREAD) o->priority = priority;
@@ -8147,7 +8984,7 @@ index 93288d5..7a63e12 100644
  }
  
  int GetThreadPriority(HANDLE h)
-@@ -988,7 +1102,7 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
+@@ -988,7 +1134,7 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
       * FILETIME. ponytail: period is ignored -- one-shot only, revisit if a
       * title actually arms a repeating timer. */
      if (dueTime->QuadPart <= 0) {
@@ -8156,7 +8993,7 @@ index 93288d5..7a63e12 100644
          LONGLONG ns = -dueTime->QuadPart * 100LL;
          o->waitable_due_time.tv_sec  += (time_t)(ns / 1000000000LL);
          o->waitable_due_time.tv_nsec += (long)(ns % 1000000000LL);
-@@ -998,9 +1112,18 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
+@@ -998,9 +1144,18 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
          }
      } else {
          /* FILETIME epoch is 1601-01-01; Unix is 1970-01-01. */
@@ -8177,7 +9014,7 @@ index 93288d5..7a63e12 100644
      }
      (void)period;
      o->waitable_armed = 1;
-@@ -1271,7 +1394,23 @@ VOID OutputDebugStringA(LPCSTR str)
+@@ -1271,7 +1426,23 @@ VOID OutputDebugStringA(LPCSTR str)
      if (str) fputs(str, stderr);
  }
  
@@ -8201,7 +9038,7 @@ index 93288d5..7a63e12 100644
  
  BOOL IsDebuggerPresent(void)
  {
-@@ -1456,7 +1595,11 @@ DWORD XInputGetState(DWORD idx, XINPUT_STATE *state)
+@@ -1456,7 +1627,11 @@ DWORD XInputGetState(DWORD idx, XINPUT_STATE *state)
  BOOL TerminateProcess(HANDLE process, UINT exitCode)
  {
      (void)process;
@@ -8213,7 +9050,7 @@ index 93288d5..7a63e12 100644
  }
  
  VOID OutputDebugStringW(LPCWSTR str)
-@@ -1781,6 +1924,18 @@ BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX b)
+@@ -1781,6 +1956,18 @@ BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX b)
      b->ullAvailPhys     = avail;
      b->ullTotalPageFile = b->ullTotalPhys + (ULONGLONG)swap.xsu_total;
      b->ullAvailPageFile = b->ullAvailPhys + (ULONGLONG)swap.xsu_avail;
@@ -8233,10 +9070,24 @@ index 93288d5..7a63e12 100644
      struct sysinfo si;
      if (sysinfo(&si) != 0) return FALSE;
 diff --git a/src/platform/win32_compat.h b/src/platform/win32_compat.h
-index 22762ee..47b6286 100644
+index 22762ee..1a7ecf9 100644
 --- a/src/platform/win32_compat.h
 +++ b/src/platform/win32_compat.h
-@@ -168,6 +168,7 @@ DWORD  GetCurrentProcessId(void);
+@@ -127,6 +127,13 @@ BOOL  DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc,
+ HANDLE      w32_open_handle(int fd, const char *host_path);
+ int         w32_handle_fd(HANDLE h);
+ const char *w32_handle_path(HANDLE h);
++/* A handle on a file (kind 1) or directory (kind 2) inside the mounted disc
++ * image: its byte offset and size in the image, its directory node, and a
++ * per-handle position. w32_handle_iso returns the kind, 0 = a host file. */
++void        w32_handle_set_iso(HANDLE h, int kind, unsigned long long off,
++                               unsigned long long size, int node);
++int         w32_handle_iso(HANDLE h, unsigned long long *off, unsigned long long *size,
++                           int *node, unsigned long long **pos);
+ 
+ /* ---- Events ----------------------------------------------------------- */
+ HANDLE CreateEventA(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialState, LPCSTR name);
+@@ -168,6 +175,7 @@ DWORD  GetCurrentProcessId(void);
  BOOL   SetThreadPriority(HANDLE h, int priority);
  int    GetThreadPriority(HANDLE h);
  VOID   SwitchToThread(void);
@@ -8244,7 +9095,7 @@ index 22762ee..47b6286 100644
  DWORD  QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data);
  
  /* ---- Sleep ------------------------------------------------------------ */
-@@ -228,6 +229,7 @@ unsigned int _clearfp(void);   /* clear pending FPU exception flags */
+@@ -228,6 +236,7 @@ unsigned int _clearfp(void);   /* clear pending FPU exception flags */
  
  /* MSVC stack alloca alias. <alloca.h> provides the underlying function. */
  #include <alloca.h>
@@ -8252,7 +9103,7 @@ index 22762ee..47b6286 100644
  #define _alloca(n) alloca(n)
  
  /* ---- Win32 file API (POSIX-backed) ----------------------------------- */
-@@ -438,7 +440,7 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+@@ -438,7 +447,7 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
   * 
   * Note: GCC needs correct struct. This is from nxdk
   * */

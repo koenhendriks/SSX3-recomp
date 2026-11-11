@@ -235,7 +235,10 @@ else()
         add_library(Fontconfig::Fontconfig INTERFACE IMPORTED)
     endif()
     if(TARGET SDL2::SDL2 AND TARGET SDL2_ttf::SDL2_ttf AND TARGET Fontconfig::Fontconfig)
-        add_executable(ssx3_launcher src/launcher/launcher_sdl.c)
+        # The disc image reader is the toolkit's (a .iso can be picked).
+        add_executable(ssx3_launcher src/launcher/launcher_sdl.c
+                       ${XBOXRECOMP_DIR}/src/kernel/xiso.c)
+        target_include_directories(ssx3_launcher PRIVATE ${XBOXRECOMP_DIR}/src/kernel)
         set_target_properties(ssx3_launcher PROPERTIES OUTPUT_NAME launcher)
         target_link_libraries(ssx3_launcher PRIVATE SDL2::SDL2 SDL2_ttf::SDL2_ttf
                               Fontconfig::Fontconfig)

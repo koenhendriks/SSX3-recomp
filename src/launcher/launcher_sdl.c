@@ -49,6 +49,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "xiso.h"                 /* the toolkit's disc image reader */
 #include "build_info.h"           /* SSX3_BUILD_COMMIT: v0.2.4, or a commit */
 
 extern char **environ;
@@ -225,6 +226,30 @@ static int dir_exists(const char *p)
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/* The XBE certificate of an XBE in memory: title id and name. 0 = not one. */
+static int xbe_cert(const unsigned char *x, size_t n, unsigned *title_id, char *name, size_t name_size)
+{
+    unsigned base, cert_va;
+    const unsigned char *cert;
+    int i;
+    if (n < 0x180 || memcmp(x, "XBEH", 4))
+        return 0;
+    memcpy(&base, x + 0x104, 4);
+    memcpy(&cert_va, x + 0x118, 4);
+    if (cert_va < base || (size_t)(cert_va - base) + 0xA0 > n)
+        return 0;
+    cert = x + (cert_va - base);
+    memcpy(title_id, cert + 8, 4);
+    for (i = 0; i < 40 && (size_t)i + 1 < name_size; i++) {
+        unsigned short c = (unsigned short)(cert[0xC + i * 2] | cert[0xD + i * 2] << 8);
+        if (!c)
+            break;
+        name[i] = c < 128 ? (char)c : '?';
+    }
+    name[i] = 0;
+    return 1;
+}
+
 /* Reads the XBE certificate: title id and name. 0 = not an XBE. */
 static int read_xbe(const char *path, unsigned *title_id, char *name, size_t name_size)
 {
@@ -265,8 +290,39 @@ static int check_game(const char *dir, char *msg, size_t n)
     char xbe[PATH_MAX + 16], data[PATH_MAX + 8], name[48];
     unsigned id = 0;
     if (!*dir) {
-        snprintf(msg, n, "Choose the folder of your SSX 3 game files (the one with default.xbe).");
+        snprintf(msg, n, "Choose your SSX 3 disc image (.iso) or the folder of its files (the one with default.xbe).");
         return 0;
+    }
+    if (file_exists(dir)) {
+        /* A disc image: XISO or a full redump, read in place by the game. */
+        char why[160];
+        xiso *x = xiso_open(dir, why, sizeof why);
+        xiso_entry e;
+        unsigned char *buf;
+        size_t len = 0;
+        int ok;
+        if (!x) {
+            snprintf(msg, n, "This file is %s.", why);
+            return 0;
+        }
+        buf = (unsigned char *)xiso_read_all(x, "default.xbe", &len);
+        ok = buf && xbe_cert(buf, len, &id, name, sizeof name);
+        free(buf);
+        if (!ok) {
+            snprintf(msg, n, "This disc image has no readable default.xbe.");
+        } else if (!xiso_find(x, "data", &e) || !e.is_dir) {
+            snprintf(msg, n, "Found %s, but the disc image has no data folder.", name);
+            ok = 0;
+        } else if (id != TITLE_ID) {
+            snprintf(msg, n, "This is %s (title %08X). This build needs SSX 3, PAL version (4541003C).",
+                     *name ? name : "another game", id);
+            ok = 0;
+        } else {
+            snprintf(msg, n, "Found %s (PAL) disc image, %d files. Ready to play.", name,
+                     xiso_file_count(x));
+        }
+        xiso_close(x);
+        return ok;
     }
     snprintf(xbe, sizeof xbe, "%s/default.xbe", dir);
     if (!file_exists(xbe))
@@ -489,6 +545,53 @@ static void browse(void)
     update_status();
 }
 
+/* Picks a disc image (.iso) with the system's file dialog. */
+static void browse_image(void)
+{
+    char out[PATH_MAX], start[PATH_MAX + 2];
+    int rc;
+    struct stat st;
+
+    snprintf(start, sizeof start, "%s", *s_path ? s_path : getenv("HOME") ? getenv("HOME") : "/");
+    if (stat(start, &st) == 0 && S_ISREG(st.st_mode)) {
+        char *slash = strrchr(start, '/');
+        if (slash && slash != start)
+            *slash = 0;
+    }
+#if defined(__APPLE__)
+    {
+        char script[PATH_MAX + 320];
+        snprintf(script, sizeof script,
+                 "POSIX path of (choose file with prompt \"Choose your SSX 3 disc image (.iso)\" "
+                 "of type {\"public.iso-image\", \"iso\"} default location (POSIX file \"%s/\"))", start);
+        char *osa[] = { "osascript", "-e", script, NULL };
+        rc = run_capture(osa, out, sizeof out);
+    }
+#else
+    {
+        char fn[PATH_MAX + 4];
+        snprintf(fn, sizeof fn, "%s/", start);
+        char *zen[] = { "zenity", "--file-selection", "--title=Choose your SSX 3 disc image (.iso)",
+                        "--file-filter=Xbox disc images | *.iso *.ISO *.xiso", "--filename", fn, NULL };
+        rc = run_capture(zen, out, sizeof out);
+        if (rc < 0) {
+            char *kd[] = { "kdialog", "--getopenfilename", start, "*.iso *.ISO *.xiso", NULL };
+            rc = run_capture(kd, out, sizeof out);
+        }
+    }
+#endif
+    if (rc < 0) {
+        snprintf(s_status, sizeof s_status,
+                 "No file dialog found (install zenity or kdialog). Type the path in the box above.");
+        s_game_ok = 0;
+        return;
+    }
+    if (rc != 0 || !*out)
+        return;                         /* cancelled */
+    snprintf(s_path, sizeof s_path, "%s", out);
+    update_status();
+}
+
 #if defined(__APPLE__)
 static char s_data[PATH_MAX];   /* ~/Library/Application Support/SSX3, or "" */
 
@@ -702,6 +805,38 @@ static void play(void)
                 "Keep the launcher in the same folder as " GAME_EXE ".");
         return;
     }
+#if defined(__APPLE__)
+    {
+        /* A disc image is read-only: the saves (UDATA/TDATA, kept in the
+         * game folder with an extracted rip) go to the data folder. The
+         * first time, the saves of the folder played before are copied
+         * over, so switching to the .iso keeps your progress. */
+        const char *prev = ini_get("last_folder");
+        char saves[PATH_MAX + 8], from[PATH_MAX + 8], to[PATH_MAX + 16];
+        if (!prev || !*prev)
+            prev = ini_get("game_dir");
+        if (file_exists(s_path) && s_data[0]) {
+            snprintf(saves, sizeof saves, "%s/saves", s_data);
+            mkdir(saves, 0755);
+            snprintf(to, sizeof to, "%s/UDATA", saves);
+            if (!dir_exists(to) && prev && *prev && dir_exists(prev)) {
+                static const char *trees[] = { "UDATA", "TDATA" };
+                for (int i = 0; i < 2; i++) {
+                    snprintf(from, sizeof from, "%s/%s", prev, trees[i]);
+                    if (dir_exists(from)) {
+                        char *cp[] = { "/bin/cp", "-R", from, saves, NULL };
+                        pid_t pid;
+                        if (posix_spawn(&pid, cp[0], NULL, NULL, cp, environ) == 0)
+                            waitpid(pid, NULL, 0);
+                    }
+                }
+            }
+            env_set("RECOMP_SAVE_DIR", saves);
+        } else if (dir_exists(s_path)) {
+            ini_set("last_folder", s_path);
+        }
+    }
+#endif
     save_settings();
     have_dm = SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(s_win), &dm) == 0 && dm.h > 0;
 
@@ -1081,8 +1216,10 @@ static int draw_form(int *want_play)
 
     heading("Game files", L, y);
     y += 24;
-    text_field(W_PATH, L, y, WIN_W - 2 * L - 106, RH, s_path);
-    if (button(WIN_W - L - 96, y, 96, RH, "Browse...", 0, 1))
+    text_field(W_PATH, L, y, WIN_W - 2 * L - 226, RH, s_path);
+    if (button(WIN_W - L - 216, y, 110, RH, "Disc image...", 0, 1))
+        browse_image();
+    if (button(WIN_W - L - 96, y, 96, RH, "Folder...", 0, 1))
         browse();
     y += RH + 6;
     y += text(s_font, s_status, L, y, s_game_ok ? C_OK : C_ERR, 0, WIN_W - 2 * L);
@@ -1424,6 +1561,13 @@ int main(int argc, char **argv)
                 } else if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER)
                            && s_open == W_NONE && s_game_ok) {
                     want_play = 1;
+                }
+                break;
+            case SDL_DROPFILE:        /* a disc image or a folder dropped on the window */
+                if (e.drop.file) {
+                    snprintf(s_path, sizeof s_path, "%s", e.drop.file);
+                    SDL_free(e.drop.file);
+                    update_status();
                 }
                 break;
             case SDL_CONTROLLERDEVICEADDED:
